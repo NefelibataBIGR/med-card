@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import Base
 from app.models import Card, ImportChunkFailure, Textbook, TextbookStatus
-from app.services.textbook_importer import TextbookImporter
+from app.services.textbook_importer import ImportErrorWithMessage, TextbookImporter
 
 
 def build_session() -> Session:
@@ -28,7 +29,7 @@ def test_process_textbook_dedupes_and_keeps_partial_success_on_chunk_failure(mon
     db.commit()
     db.refresh(textbook)
 
-    monkeypatch.setattr(importer, "_extract_chunks", lambda _path: ["chunk-1", "chunk-2"])
+    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1", "chunk-2"])
 
     async def fake_extract_cards(chunk: str) -> list[dict[str, str]]:
         if chunk == "chunk-1":
@@ -87,7 +88,7 @@ def test_process_textbook_skips_highly_similar_concepts(monkeypatch) -> None:
     db.commit()
     db.refresh(textbook)
 
-    monkeypatch.setattr(importer, "_extract_chunks", lambda _path: ["chunk-1"])
+    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1"])
 
     async def fake_extract_cards(_chunk: str) -> list[dict[str, str]]:
         return [
@@ -131,7 +132,7 @@ def test_retry_failure_resolves_queue_and_updates_textbook(monkeypatch) -> None:
     db.commit()
     db.refresh(textbook)
 
-    monkeypatch.setattr(importer, "_extract_chunks", lambda _path: ["chunk-1", "chunk-2"])
+    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1", "chunk-2"])
 
     async def failing_extract(chunk: str) -> list[dict[str, str]]:
         if chunk == "chunk-1":
@@ -180,3 +181,53 @@ def test_retry_failure_resolves_queue_and_updates_textbook(monkeypatch) -> None:
     assert refreshed_textbook.failed_chunks == 0
     assert refreshed_textbook.card_count == 2
     assert refreshed_textbook.error_message is None
+
+
+def test_retry_failure_keeps_failure_open_when_retry_fails(monkeypatch) -> None:
+    db = build_session()
+    importer = TextbookImporter(db)
+
+    textbook = Textbook(
+        filename="retry-fail.pdf",
+        stored_path="retry-fail.pdf",
+        status=TextbookStatus.pending,
+        summary="queued",
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1", "chunk-2"])
+
+    async def failing_extract(chunk: str) -> list[dict[str, str]]:
+        if chunk == "chunk-1":
+            return [
+                {
+                    "concept_name": "Cardiac reserve",
+                    "summary": "Ability of the heart to increase output above resting level.",
+                    "chapter": "Circulation",
+                    "source_excerpt": "Definition one.",
+                }
+            ]
+        raise RuntimeError("initial failure")
+
+    monkeypatch.setattr(importer.llm, "extract_cards", failing_extract)
+
+    import anyio
+
+    anyio.run(importer.process_textbook, textbook.id)
+    failure = db.scalars(select(ImportChunkFailure)).one()
+
+    async def retry_fail(_chunk: str) -> list[dict[str, str]]:
+        raise RuntimeError("retry failed again")
+
+    monkeypatch.setattr(importer.llm, "extract_cards", retry_fail)
+
+    with pytest.raises(ImportErrorWithMessage):
+        anyio.run(importer.retry_failure, failure.id)
+
+    refreshed_failure = db.get(ImportChunkFailure, failure.id)
+    assert refreshed_failure is not None
+    assert refreshed_failure.resolved is False
+    assert refreshed_failure.retry_count == 1
+    assert refreshed_failure.error_message == "retry failed again"

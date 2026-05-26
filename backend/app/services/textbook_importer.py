@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import UploadFile
-from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,6 +23,7 @@ from ..models import (
     utc_now,
 )
 from .llm import LLMClient
+from .text_extraction import TextExtractionError, TextLayerChunkExtractor
 
 
 @dataclass
@@ -46,16 +46,11 @@ class ImportErrorWithMessage(RuntimeError):
 
 
 class TextbookImporter:
-    _chapter_patterns = (
-        re.compile(r"^\s*第[一二三四五六七八九十百千0-9]+[章节篇部卷]\s*.*$"),
-        re.compile(r"^\s*Chapter\s+\d+[:.\s-].*$", re.IGNORECASE),
-        re.compile(r"^\s*[一二三四五六七八九十]+[、.．]\s*.+$"),
-    )
-
     def __init__(self, db: Session) -> None:
         self.db = db
         self.settings = get_settings()
         self.llm = LLMClient()
+        self.text_extractor = TextLayerChunkExtractor()
 
     def create_import(self, upload: UploadFile) -> Textbook:
         if not upload.filename or not upload.filename.lower().endswith(".pdf"):
@@ -103,7 +98,7 @@ class TextbookImporter:
         imported_cards = 0
         skipped_cards = 0
         try:
-            chunks = self._extract_chunks(Path(textbook.stored_path))
+            chunks = self.text_extractor.extract_chunks(Path(textbook.stored_path))
             textbook.total_chunks = len(chunks)
             textbook.summary = f"Processing {len(chunks)} chunks."
             self.db.commit()
@@ -142,6 +137,13 @@ class TextbookImporter:
             self.db.commit()
             self.db.refresh(textbook)
             return ImportResult(textbook=textbook, imported_cards=imported_cards, skipped_cards=skipped_cards)
+        except TextExtractionError as exc:
+            textbook.status = TextbookStatus.failed
+            textbook.processed_at = utc_now()
+            textbook.error_message = str(exc)
+            textbook.summary = "Import failed during text extraction."
+            self.db.commit()
+            raise ImportErrorWithMessage(str(exc)) from exc
         except Exception as exc:
             textbook.status = TextbookStatus.failed
             textbook.processed_at = utc_now()
@@ -161,7 +163,16 @@ class TextbookImporter:
         if textbook is None:
             raise ImportErrorWithMessage("Textbook import record was not found.")
 
-        imported_cards, skipped_cards = await self._process_chunk(textbook, failure.chunk_index, failure.chunk_excerpt, failure)
+        try:
+            imported_cards, skipped_cards = await self._process_chunk(textbook, failure.chunk_index, failure.chunk_excerpt, failure)
+        except ImportErrorWithMessage as exc:
+            self.db.refresh(failure)
+            failure.retry_count += 1
+            failure.error_message = str(exc)
+            failure.updated_at = utc_now()
+            self.db.commit()
+            raise
+
         self.db.refresh(failure)
         failure.retry_count += 1
         failure.resolved = True
@@ -239,104 +250,6 @@ class TextbookImporter:
                 self.db.commit()
                 return 0, 0
             raise ImportErrorWithMessage(str(exc)) from exc
-
-    def _extract_chunks(self, pdf_path: Path) -> list[str]:
-        reader = PdfReader(str(pdf_path))
-        paragraphs: list[str] = []
-        current_chapter = "Uncategorized"
-        started_content = False
-
-        for page in reader.pages:
-            text = page.extract_text() or ""
-            for paragraph in self._extract_paragraphs(text):
-                if not paragraph:
-                    continue
-                if self._is_noise_paragraph(paragraph) and not started_content:
-                    continue
-                started_content = True
-                if self._is_chapter_heading(paragraph):
-                    current_chapter = paragraph
-                    paragraphs.append(f"## {current_chapter}")
-                    continue
-                paragraphs.append(f"[{current_chapter}] {paragraph}")
-
-        if not paragraphs:
-            raise ImportErrorWithMessage("No text layer was found in the PDF. OCR is not implemented in this version.")
-
-        return self._group_paragraphs(paragraphs)
-
-    def _extract_paragraphs(self, text: str) -> list[str]:
-        lines = [self._normalize_line(line) for line in text.splitlines()]
-        lines = [line for line in lines if line]
-        paragraphs: list[str] = []
-        current: list[str] = []
-
-        for line in lines:
-            if self._is_noise_paragraph(line):
-                if current:
-                    paragraphs.append(" ".join(current))
-                    current = []
-                continue
-            if self._is_chapter_heading(line):
-                if current:
-                    paragraphs.append(" ".join(current))
-                    current = []
-                paragraphs.append(line)
-                continue
-
-            current.append(line)
-            paragraph_length = sum(len(item) for item in current)
-            if paragraph_length >= self.settings.extraction_paragraph_limit or line.endswith(("。", ".", ";", "；", "!", "！", "?", "？")):
-                paragraphs.append(" ".join(current))
-                current = []
-
-        if current:
-            paragraphs.append(" ".join(current))
-        return paragraphs
-
-    def _group_paragraphs(self, paragraphs: list[str]) -> list[str]:
-        chunks: list[str] = []
-        current: list[str] = []
-        size = 0
-
-        for paragraph in paragraphs:
-            is_heading = paragraph.startswith("## ")
-            paragraph_size = len(paragraph)
-            if current and (is_heading or size + paragraph_size > self.settings.extraction_chunk_size):
-                chunks.append("\n".join(current))
-                current = [paragraph]
-                size = paragraph_size
-            else:
-                current.append(paragraph)
-                size += paragraph_size
-
-        if current:
-            chunks.append("\n".join(current))
-        return chunks
-
-    def _normalize_line(self, line: str) -> str:
-        line = line.replace("\u3000", " ")
-        line = re.sub(r"\s+", " ", line).strip()
-        return line
-
-    def _is_noise_paragraph(self, text: str) -> bool:
-        stripped = text.strip()
-        if not stripped:
-            return True
-        if len(stripped) <= 2 and stripped.isdigit():
-            return True
-        if re.fullmatch(r"[0-9\s]+", stripped):
-            return True
-        if any(token in stripped for token in ("ISBN", "www.", "pmph.com", "定价", "购书热线", "CIP", "版权所有")):
-            return True
-        weird_ratio = sum(1 for char in stripped if ord(char) < 32 and char not in ("\t", "\n", "\r")) / len(stripped)
-        return weird_ratio > 0.08
-
-    def _is_chapter_heading(self, text: str) -> bool:
-        stripped = text.strip()
-        if len(stripped) > 80:
-            return False
-        return any(pattern.match(stripped) for pattern in self._chapter_patterns)
 
     def _persist_cards(self, textbook: Textbook, raw_cards: list[dict[str, str]]) -> tuple[int, int]:
         imported = 0
