@@ -13,3 +13,5 @@ backend/data/*.db
 backend/data/uploads/
 
 textbooks/
+
+*.log

@@ -28,8 +28,10 @@ class CardRead(BaseModel):
     id: int
     textbook_id: int
     concept_name: str
+    english_name: str | None
     summary: str
     chapter: str
+    page_number: int | None
     source_excerpt: str
     status: CardStatus
     created_at: datetime
@@ -38,8 +40,10 @@ class CardRead(BaseModel):
 
 class CardUpdate(BaseModel):
     concept_name: str | None = Field(default=None, min_length=1, max_length=255)
+    english_name: str | None = Field(default=None, max_length=255)
     summary: str | None = Field(default=None, min_length=1, max_length=500)
     chapter: str | None = Field(default=None, min_length=1, max_length=255)
+    page_number: int | None = Field(default=None, ge=1)
     source_excerpt: str | None = Field(default=None, min_length=1, max_length=2_000)
 
 
@@ -73,6 +77,8 @@ class ImportChunkFailureRead(BaseModel):
     id: int
     textbook_id: int
     chunk_index: int
+    page_number: int | None
+    section_path: str | None
     chunk_excerpt: str
     error_message: str
     retry_count: int

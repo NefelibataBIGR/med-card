@@ -20,8 +20,10 @@ export interface Card {
   id: number
   textbook_id: number
   concept_name: string
+  english_name: string | null
   summary: string
   chapter: string
+  page_number: number | null
   source_excerpt: string
   status: CardStatus
   created_at: string
@@ -50,6 +52,8 @@ export interface ImportChunkFailure {
   id: number
   textbook_id: number
   chunk_index: number
+  page_number: number | null
+  section_path: string | null
   chunk_excerpt: string
   error_message: string
   retry_count: number

@@ -18,10 +18,21 @@ import type { Card, ImportChunkFailure, Textbook } from './types'
 
 type TabKey = 'import' | 'draw' | 'pools'
 
-const emptyCardForm = {
+type EditForm = {
+  concept_name: string
+  english_name: string
+  summary: string
+  chapter: string
+  page_number: string
+  source_excerpt: string
+}
+
+const emptyCardForm: EditForm = {
   concept_name: '',
+  english_name: '',
   summary: '',
   chapter: '',
+  page_number: '',
   source_excerpt: '',
 }
 
@@ -49,7 +60,7 @@ export function App() {
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
-  const [editForm, setEditForm] = useState(emptyCardForm)
+  const [editForm, setEditForm] = useState<EditForm>(emptyCardForm)
   const [poolQuery, setPoolQuery] = useState('')
   const [uncertainPoolItems, setUncertainPoolItems] = useState<Card[]>([])
   const [familiarPoolItems, setFamiliarPoolItems] = useState<Card[]>([])
@@ -80,8 +91,10 @@ export function App() {
     if (currentCard) {
       setEditForm({
         concept_name: currentCard.concept_name,
+        english_name: currentCard.english_name ?? '',
         summary: currentCard.summary,
         chapter: currentCard.chapter,
+        page_number: currentCard.page_number ? String(currentCard.page_number) : '',
         source_excerpt: currentCard.source_excerpt,
       })
     } else {
@@ -151,6 +164,7 @@ export function App() {
       await refreshTextbooks()
       event.currentTarget.reset()
       setDrawMessage(result.message)
+      setTab('import')
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -227,7 +241,15 @@ export function App() {
     setLoading(true)
     setError('')
     try {
-      const updated = await updateCard(sessionId || undefined, currentCard.id, editForm)
+      const payload = {
+        concept_name: editForm.concept_name,
+        english_name: editForm.english_name.trim() || null,
+        summary: editForm.summary,
+        chapter: editForm.chapter,
+        page_number: editForm.page_number.trim() ? Number(editForm.page_number) : null,
+        source_excerpt: editForm.source_excerpt,
+      }
+      const updated = await updateCard(sessionId || undefined, currentCard.id, payload)
       setCurrentCard(updated)
       setDrawMessage('卡片内容已保存。')
       setIsEditorOpen(false)
@@ -246,7 +268,7 @@ export function App() {
       await retryImportFailure(textbookId, failureId)
       await refreshTextbooks()
       await refreshImportFailures(textbookId)
-      setDrawMessage('失败文本块已重试。')
+      setDrawMessage('失败段落已重试。')
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -261,9 +283,7 @@ export function App() {
       const result = await retryAllImportFailures(textbookId)
       await refreshTextbooks()
       await refreshImportFailures(textbookId)
-      setDrawMessage(
-        `已重试 ${result.retried_count} 个失败块，成功恢复 ${result.resolved_count} 个，剩余 ${result.remaining_failures} 个。`,
-      )
+      setDrawMessage(`已重试 ${result.retried_count} 个失败段落，恢复 ${result.resolved_count} 个，剩余 ${result.remaining_failures} 个。`)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -271,15 +291,22 @@ export function App() {
     }
   }
 
+  function renderCardMeta(card: Card) {
+    return (
+      <>
+        <p className="chapter">{card.chapter}</p>
+        <p className="hint">{card.page_number ? `教材第 ${card.page_number} 页` : '页码未知'}</p>
+      </>
+    )
+  }
+
   return (
     <div className="shell">
       <header className="hero">
         <div>
           <p className="eyebrow">MED CARD</p>
-          <h1>医学教材抽卡复习</h1>
-          <p className="lede">
-            导入教材 PDF，抽取复习卡片，并按“模糊优先、单轮不重复”的规则推进复习。
-          </p>
+          <h1>医学教材概念卡片复习</h1>
+          <p className="lede">按段落抽取主概念，一段一张卡，保留英文名、教材页码和章节路径，便于回看原文。</p>
         </div>
         <div className="heroPanel">
           <span>当前轮次</span>
@@ -310,13 +337,12 @@ export function App() {
               <form className="uploadForm" onSubmit={handleUpload}>
                 <input accept="application/pdf" name="pdf" type="file" />
                 <button disabled={uploading} type="submit">
-                  {uploading ? '导入中...' : '上传并抽取'}
+                  {uploading ? '导入中…' : '上传并抽卡'}
                 </button>
               </form>
-              <p className="hint">
-                在 `.env` 中配置 `MED_CARD_LLM_API_KEY`。本地烟测时可切换到 `mock` 提供者。
-              </p>
+              <p className="hint">在 `.env` 中配置 `MED_CARD_LLM_API_KEY`。重新导入会覆盖旧教材、旧卡片和旧失败记录。</p>
             </section>
+
             <section className="panel">
               <h2>导入记录</h2>
               <div className="list">
@@ -328,8 +354,7 @@ export function App() {
                       <p>{item.summary ?? '正在处理中，暂时还没有摘要。'}</p>
                       {item.processed_at ? <p className="hint">完成时间：{new Date(item.processed_at).toLocaleString()}</p> : null}
                       <p className="hint">
-                        进度 {item.processed_chunks}/{item.total_chunks || 0} 个文本块，失败 {item.failed_chunks} 个，
-                        跳过 {item.skipped_cards} 个
+                        进度 {item.processed_chunks}/{item.total_chunks || 0} 个段落，失败 {item.failed_chunks} 个，跳过 {item.skipped_cards} 条
                       </p>
                       {item.error_message ? <p className="hint">{item.error_message}</p> : null}
                     </div>
@@ -341,33 +366,40 @@ export function App() {
                         onClick={() => setSelectedTextbookId((current) => (current === item.id ? null : item.id))}
                         type="button"
                       >
-                        {selectedTextbookId === item.id ? '收起失败块' : '查看失败块'}
+                        {selectedTextbookId === item.id ? '收起失败段落' : '查看失败段落'}
                       </button>
                     </div>
                   </article>
                 ))}
               </div>
             </section>
+
             <section className="panel">
               <div className="sectionHeader">
-                <h2>失败文本块</h2>
+                <h2>失败段落</h2>
                 {selectedTextbookId !== null ? (
-                  <button disabled={retryingAllFailures || importFailures.length === 0} onClick={() => void handleRetryAllFailures(selectedTextbookId)} type="button">
-                    {retryingAllFailures ? '批量重试中...' : '全部重试'}
+                  <button
+                    disabled={retryingAllFailures || importFailures.length === 0}
+                    onClick={() => void handleRetryAllFailures(selectedTextbookId)}
+                    type="button"
+                  >
+                    {retryingAllFailures ? '批量重试中…' : '全部重试'}
                   </button>
                 ) : null}
               </div>
-              {selectedTextbookId === null ? <p className="hint">先选择一条导入记录，再查看失败文本块。</p> : null}
+              {selectedTextbookId === null ? <p className="hint">先选择一条导入记录，再查看失败段落。</p> : null}
               {selectedTextbookId !== null && importFailures.length === 0 ? (
-                <p className="hint">这条导入记录当前没有未解决的失败文本块。</p>
+                <p className="hint">这条导入记录当前没有未解决的失败段落。</p>
               ) : null}
               <div className="list">
                 {importFailures.map((failure) => (
                   <article className="listItem stacked" key={failure.id}>
                     <div className="meta">
-                      <strong>文本块 {failure.chunk_index}</strong>
+                      <strong>段落 {failure.chunk_index}</strong>
+                      <span>{failure.page_number ? `教材第 ${failure.page_number} 页` : '页码未知'}</span>
                       <span>已重试 {failure.retry_count} 次</span>
                     </div>
+                    {failure.section_path ? <p className="hint">{failure.section_path}</p> : null}
                     <p>{failure.error_message}</p>
                     <blockquote>{failure.chunk_excerpt}</blockquote>
                     <button
@@ -375,7 +407,7 @@ export function App() {
                       onClick={() => void handleRetryFailure(failure.textbook_id, failure.id)}
                       type="button"
                     >
-                      {retryingFailureId === failure.id ? '重试中...' : '重试该文本块'}
+                      {retryingFailureId === failure.id ? '重试中…' : '重试该段落'}
                     </button>
                   </article>
                 ))}
@@ -389,7 +421,7 @@ export function App() {
             <section className="panel cardPanel">
               <div className="cardToolbar">
                 <button disabled={loading} onClick={() => void handleDraw()} type="button">
-                  {loading ? '处理中...' : '抽取下一张'}
+                  {loading ? '处理中…' : '抽取下一张'}
                 </button>
                 <button disabled={!sessionId || loading} onClick={() => void handleResetRound()} type="button">
                   重置本轮
@@ -400,7 +432,8 @@ export function App() {
                 <article className="cardView">
                   <span className={`statusBadge status-${currentCard.status}`}>{cardStatusLabels[currentCard.status]}</span>
                   <h2>{currentCard.concept_name}</h2>
-                  <p className="chapter">{currentCard.chapter}</p>
+                  {currentCard.english_name ? <p className="chapter">{currentCard.english_name}</p> : null}
+                  {renderCardMeta(currentCard)}
                   <p>{currentCard.summary}</p>
                   <blockquote>{currentCard.source_excerpt}</blockquote>
                 </article>
@@ -438,9 +471,9 @@ export function App() {
           <>
             <section className="panel">
               <div className="poolToolbar">
-                <p className="hint">同时浏览模糊池与熟悉池，支持统一搜索。</p>
+                <p className="hint">同时浏览模糊池与熟悉池，支持统一搜索概念名、英文名、介绍和章节路径。</p>
                 <input
-                  placeholder="搜索概念、释义或章节"
+                  placeholder="搜索概念、英文名、介绍或章节路径"
                   value={poolQuery}
                   onChange={(event) => setPoolQuery(event.target.value)}
                 />
@@ -459,8 +492,9 @@ export function App() {
                       <article className="listItem stacked" key={`uncertain-${item.id}`}>
                         <div className="meta">
                           <strong>{item.concept_name}</strong>
-                          <span>{item.chapter}</span>
+                          <span>{item.english_name || '无英文名'}</span>
                         </div>
+                        {renderCardMeta(item)}
                         <p>{item.summary}</p>
                       </article>
                     ))}
@@ -477,8 +511,9 @@ export function App() {
                       <article className="listItem stacked" key={`familiar-${item.id}`}>
                         <div className="meta">
                           <strong>{item.concept_name}</strong>
-                          <span>{item.chapter}</span>
+                          <span>{item.english_name || '无英文名'}</span>
                         </div>
+                        {renderCardMeta(item)}
                         <p>{item.summary}</p>
                       </article>
                     ))}
@@ -511,14 +546,29 @@ export function App() {
                 />
               </label>
               <label>
-                章节
+                英文名
+                <input
+                  value={editForm.english_name}
+                  onChange={(event) => setEditForm((value) => ({ ...value, english_name: event.target.value }))}
+                />
+              </label>
+              <label>
+                章节路径
                 <input
                   value={editForm.chapter}
                   onChange={(event) => setEditForm((value) => ({ ...value, chapter: event.target.value }))}
                 />
               </label>
+              <label>
+                教材页码
+                <input
+                  inputMode="numeric"
+                  value={editForm.page_number}
+                  onChange={(event) => setEditForm((value) => ({ ...value, page_number: event.target.value }))}
+                />
+              </label>
               <label className="full">
-                精简释义
+                介绍
                 <textarea
                   rows={4}
                   value={editForm.summary}
@@ -526,13 +576,11 @@ export function App() {
                 />
               </label>
               <label className="full">
-                原文片段
+                原文段落
                 <textarea
                   rows={6}
                   value={editForm.source_excerpt}
-                  onChange={(event) =>
-                    setEditForm((value) => ({ ...value, source_excerpt: event.target.value }))
-                  }
+                  onChange={(event) => setEditForm((value) => ({ ...value, source_excerpt: event.target.value }))}
                 />
               </label>
             </div>

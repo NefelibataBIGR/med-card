@@ -48,6 +48,7 @@ class ReviewService:
             stmt = stmt.where(
                 or_(
                     Card.concept_name.ilike(needle),
+                    Card.english_name.ilike(needle),
                     Card.summary.ilike(needle),
                     Card.chapter.ilike(needle),
                 )

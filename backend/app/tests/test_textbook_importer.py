@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from io import BytesIO
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from fastapi import UploadFile
+
 from app.core.database import Base
 from app.models import Card, ImportChunkFailure, Textbook, TextbookStatus
 from app.services.textbook_importer import ImportErrorWithMessage, TextbookImporter
+from app.services.text_extraction import ParagraphChunk
 
 
 def build_session() -> Session:
@@ -29,10 +33,17 @@ def test_process_textbook_dedupes_and_keeps_partial_success_on_chunk_failure(mon
     db.commit()
     db.refresh(textbook)
 
-    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1", "chunk-2"])
+    monkeypatch.setattr(
+        importer.text_extractor,
+        "extract_chunks",
+        lambda _path: [
+            ParagraphChunk(index=1, page_number=12, section_path="Nephrology", text="chunk-1"),
+            ParagraphChunk(index=2, page_number=13, section_path="Nephrology", text="chunk-2"),
+        ],
+    )
 
-    async def fake_extract_cards(chunk: str) -> list[dict[str, str]]:
-        if chunk == "chunk-1":
+    async def fake_extract_cards(chunk: ParagraphChunk) -> list[dict[str, str]]:
+        if chunk.text == "chunk-1":
             return [
                 {
                     "concept_name": "Renal clearance",
@@ -59,6 +70,7 @@ def test_process_textbook_dedupes_and_keeps_partial_success_on_chunk_failure(mon
     assert len(cards) == 1
     assert result.imported_cards == 1
     assert result.skipped_cards == 1
+    assert cards[0].page_number == 12
 
     textbook = db.get(Textbook, textbook.id)
     assert textbook is not None
@@ -88,9 +100,13 @@ def test_process_textbook_skips_highly_similar_concepts(monkeypatch) -> None:
     db.commit()
     db.refresh(textbook)
 
-    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1"])
+    monkeypatch.setattr(
+        importer.text_extractor,
+        "extract_chunks",
+        lambda _path: [ParagraphChunk(index=1, page_number=21, section_path="Circulation", text="chunk-1")],
+    )
 
-    async def fake_extract_cards(_chunk: str) -> list[dict[str, str]]:
+    async def fake_extract_cards(_chunk: ParagraphChunk) -> list[dict[str, str]]:
         return [
             {
                 "concept_name": "Cardiac output",
@@ -116,6 +132,7 @@ def test_process_textbook_skips_highly_similar_concepts(monkeypatch) -> None:
     assert len(cards) == 1
     assert result.imported_cards == 1
     assert result.skipped_cards == 1
+    assert cards[0].page_number == 21
 
 
 def test_retry_failure_resolves_queue_and_updates_textbook(monkeypatch) -> None:
@@ -132,10 +149,17 @@ def test_retry_failure_resolves_queue_and_updates_textbook(monkeypatch) -> None:
     db.commit()
     db.refresh(textbook)
 
-    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1", "chunk-2"])
+    monkeypatch.setattr(
+        importer.text_extractor,
+        "extract_chunks",
+        lambda _path: [
+            ParagraphChunk(index=1, page_number=31, section_path="Circulation", text="chunk-1"),
+            ParagraphChunk(index=2, page_number=32, section_path="Respiration", text="chunk-2"),
+        ],
+    )
 
-    async def failing_extract(chunk: str) -> list[dict[str, str]]:
-        if chunk == "chunk-1":
+    async def failing_extract(chunk: ParagraphChunk) -> list[dict[str, str]]:
+        if chunk.text == "chunk-1":
             return [
                 {
                     "concept_name": "Stroke volume",
@@ -154,7 +178,7 @@ def test_retry_failure_resolves_queue_and_updates_textbook(monkeypatch) -> None:
 
     failure = db.scalars(select(ImportChunkFailure)).one()
 
-    async def success_extract(_chunk: str) -> list[dict[str, str]]:
+    async def success_extract(_chunk: ParagraphChunk) -> list[dict[str, str]]:
         return [
             {
                 "concept_name": "Minute ventilation",
@@ -197,10 +221,17 @@ def test_retry_failure_keeps_failure_open_when_retry_fails(monkeypatch) -> None:
     db.commit()
     db.refresh(textbook)
 
-    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1", "chunk-2"])
+    monkeypatch.setattr(
+        importer.text_extractor,
+        "extract_chunks",
+        lambda _path: [
+            ParagraphChunk(index=1, page_number=41, section_path="Circulation", text="chunk-1"),
+            ParagraphChunk(index=2, page_number=42, section_path="Circulation", text="chunk-2"),
+        ],
+    )
 
-    async def failing_extract(chunk: str) -> list[dict[str, str]]:
-        if chunk == "chunk-1":
+    async def failing_extract(chunk: ParagraphChunk) -> list[dict[str, str]]:
+        if chunk.text == "chunk-1":
             return [
                 {
                     "concept_name": "Cardiac reserve",
@@ -218,7 +249,7 @@ def test_retry_failure_keeps_failure_open_when_retry_fails(monkeypatch) -> None:
     anyio.run(importer.process_textbook, textbook.id)
     failure = db.scalars(select(ImportChunkFailure)).one()
 
-    async def retry_fail(_chunk: str) -> list[dict[str, str]]:
+    async def retry_fail(_chunk: ParagraphChunk) -> list[dict[str, str]]:
         raise RuntimeError("retry failed again")
 
     monkeypatch.setattr(importer.llm, "extract_cards", retry_fail)
@@ -247,10 +278,18 @@ def test_retry_all_failures_resolves_multiple_chunks(monkeypatch) -> None:
     db.commit()
     db.refresh(textbook)
 
-    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1", "chunk-2", "chunk-3"])
+    monkeypatch.setattr(
+        importer.text_extractor,
+        "extract_chunks",
+        lambda _path: [
+            ParagraphChunk(index=1, page_number=51, section_path="General", text="chunk-1"),
+            ParagraphChunk(index=2, page_number=52, section_path="General", text="chunk-2"),
+            ParagraphChunk(index=3, page_number=53, section_path="General", text="chunk-3"),
+        ],
+    )
 
-    async def failing_extract(chunk: str) -> list[dict[str, str]]:
-        if chunk == "chunk-1":
+    async def failing_extract(chunk: ParagraphChunk) -> list[dict[str, str]]:
+        if chunk.text == "chunk-1":
             return [
                 {
                     "concept_name": "Baseline concept",
@@ -259,7 +298,7 @@ def test_retry_all_failures_resolves_multiple_chunks(monkeypatch) -> None:
                     "source_excerpt": "chunk one",
                 }
             ]
-        raise RuntimeError(f"failed {chunk}")
+        raise RuntimeError(f"failed {chunk.text}")
 
     monkeypatch.setattr(importer.llm, "extract_cards", failing_extract)
 
@@ -267,13 +306,13 @@ def test_retry_all_failures_resolves_multiple_chunks(monkeypatch) -> None:
 
     anyio.run(importer.process_textbook, textbook.id)
 
-    async def success_extract(chunk: str) -> list[dict[str, str]]:
+    async def success_extract(chunk: ParagraphChunk) -> list[dict[str, str]]:
         return [
             {
-                "concept_name": f"Recovered {chunk}",
+                "concept_name": f"Recovered {chunk.text}",
                 "summary": "Recovered summary for failed chunk.",
                 "chapter": "Recovered",
-                "source_excerpt": chunk,
+                "source_excerpt": chunk.text,
             }
         ]
 
@@ -319,8 +358,8 @@ def test_retry_failure_uses_full_chunk_text_not_truncated_excerpt(monkeypatch) -
     textbook.failed_chunks = 1
     db.commit()
 
-    async def extract_cards(chunk: str) -> list[dict[str, str]]:
-        assert chunk == full_chunk
+    async def extract_cards(chunk: ParagraphChunk) -> list[dict[str, str]]:
+        assert chunk.text == full_chunk
         return [
             {
                 "concept_name": "Recovered concept",
@@ -341,3 +380,49 @@ def test_retry_failure_uses_full_chunk_text_not_truncated_excerpt(monkeypatch) -
     refreshed_failure = db.get(ImportChunkFailure, failure.id)
     assert refreshed_failure is not None
     assert refreshed_failure.resolved is True
+
+
+def test_create_import_replaces_old_textbook_data(monkeypatch, tmp_path) -> None:
+    db = build_session()
+    importer = TextbookImporter(db)
+    importer.settings.uploads_dir = str(tmp_path)
+
+    old_file = tmp_path / "old.pdf"
+    old_file.write_bytes(b"old-data")
+
+    old_textbook = Textbook(
+        filename="old.pdf",
+        stored_path=str(old_file),
+        status=TextbookStatus.completed,
+        summary="old",
+        card_count=1,
+    )
+    db.add(old_textbook)
+    db.commit()
+    db.refresh(old_textbook)
+
+    db.add(
+        Card(
+            textbook_id=old_textbook.id,
+            concept_name="Old concept",
+            summary="Old summary for an outdated card.",
+            chapter="Old chapter",
+            page_number=8,
+            source_excerpt="Old excerpt",
+        )
+    )
+    db.commit()
+
+    monkeypatch.setattr(importer.llm, "validate_configuration", lambda: None)
+
+    upload = UploadFile(filename="new.pdf", file=BytesIO(b"%PDF-1.4 new"))
+    new_textbook = importer.create_import(upload)
+
+    textbooks = list(db.scalars(select(Textbook)).all())
+    cards = list(db.scalars(select(Card)).all())
+
+    assert len(textbooks) == 1
+    assert textbooks[0].id == new_textbook.id
+    assert textbooks[0].filename == "new.pdf"
+    assert cards == []
+    assert old_file.exists() is False

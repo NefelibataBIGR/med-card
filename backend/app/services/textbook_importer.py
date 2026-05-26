@@ -23,7 +23,7 @@ from ..models import (
     utc_now,
 )
 from .llm import LLMClient
-from .text_extraction import TextExtractionError, TextLayerChunkExtractor
+from .text_extraction import ParagraphChunk, TextExtractionError, TextLayerChunkExtractor
 
 
 @dataclass
@@ -65,6 +65,7 @@ class TextbookImporter:
             raise ImportErrorWithMessage("一次只能导入一个 PDF 文件。")
 
         self.llm.validate_configuration()
+        self._purge_existing_textbooks()
 
         uploads_dir = Path(self.settings.uploads_dir)
         uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -77,7 +78,7 @@ class TextbookImporter:
             filename=upload.filename,
             stored_path=str(stored_path),
             status=TextbookStatus.pending,
-            summary="教材已加入导入队列。",
+            summary="教材已加入导入队列。旧数据已清空。",
             skipped_cards=0,
             total_chunks=0,
             processed_chunks=0,
@@ -95,7 +96,7 @@ class TextbookImporter:
 
         textbook.status = TextbookStatus.processing
         textbook.error_message = None
-        textbook.summary = "正在从 PDF 提取文本。"
+        textbook.summary = "正在从 PDF 提取段落。"
         textbook.processed_chunks = 0
         textbook.failed_chunks = 0
         textbook.card_count = 0
@@ -108,19 +109,19 @@ class TextbookImporter:
         try:
             chunks = self.text_extractor.extract_chunks(Path(textbook.stored_path))
             textbook.total_chunks = len(chunks)
-            textbook.summary = f"正在处理 {len(chunks)} 个文本块。"
+            textbook.summary = f"正在处理 {len(chunks)} 个段落。"
             self.db.commit()
 
-            for chunk_index, chunk in enumerate(chunks, start=1):
-                imported, skipped = await self._process_chunk(textbook, chunk_index, chunk)
+            for chunk in chunks:
+                imported, skipped = await self._process_chunk(textbook, chunk)
                 imported_cards += imported
                 skipped_cards += skipped
 
-                textbook.processed_chunks = chunk_index
+                textbook.processed_chunks = chunk.index
                 textbook.card_count = imported_cards
                 textbook.skipped_cards = skipped_cards
                 textbook.summary = (
-                    f"已处理 {textbook.processed_chunks}/{textbook.total_chunks} 个文本块，"
+                    f"已处理 {textbook.processed_chunks}/{textbook.total_chunks} 个段落，"
                     f"生成 {imported_cards} 张卡片，跳过 {skipped_cards} 条。"
                 )
                 self.db.commit()
@@ -130,16 +131,16 @@ class TextbookImporter:
             textbook.skipped_cards = skipped_cards
             if textbook.failed_chunks:
                 textbook.status = TextbookStatus.failed
-                textbook.error_message = f"{textbook.failed_chunks} 个文本块抽取失败。"
+                textbook.error_message = f"{textbook.failed_chunks} 个段落提取失败。"
                 textbook.summary = (
                     f"导入完成，但有部分失败：生成 {imported_cards} 张卡片，"
-                    f"跳过 {skipped_cards} 条，失败 {textbook.failed_chunks} 个文本块。"
+                    f"跳过 {skipped_cards} 条，失败 {textbook.failed_chunks} 个段落。"
                 )
             else:
                 textbook.status = TextbookStatus.completed
                 textbook.error_message = None
                 textbook.summary = (
-                    f"导入完成：共处理 {textbook.total_chunks} 个文本块，"
+                    f"导入完成：共处理 {textbook.total_chunks} 个段落，"
                     f"生成 {imported_cards} 张卡片，跳过 {skipped_cards} 条。"
                 )
             self.db.commit()
@@ -156,16 +157,16 @@ class TextbookImporter:
             textbook.status = TextbookStatus.failed
             textbook.processed_at = utc_now()
             textbook.error_message = str(exc)
-            textbook.summary = "导入在文本块处理完成前失败。"
+            textbook.summary = "导入在段落处理完成前失败。"
             self.db.commit()
             raise
 
     async def retry_failure(self, failure_id: int) -> RetryResult:
         failure = self.db.get(ImportChunkFailure, failure_id)
         if failure is None:
-            raise ImportErrorWithMessage("未找到失败文本块记录。")
+            raise ImportErrorWithMessage("未找到失败段落记录。")
         if failure.resolved:
-            raise ImportErrorWithMessage("该失败文本块已经处理完成。")
+            raise ImportErrorWithMessage("该失败段落已经处理完成。")
 
         textbook = self.db.get(Textbook, failure.textbook_id)
         if textbook is None:
@@ -174,8 +175,7 @@ class TextbookImporter:
         try:
             imported_cards, skipped_cards = await self._process_chunk(
                 textbook,
-                failure.chunk_index,
-                failure.chunk_text or failure.chunk_excerpt,
+                self._build_chunk_from_failure(failure),
                 failure,
             )
         except ImportErrorWithMessage as exc:
@@ -208,14 +208,14 @@ class TextbookImporter:
             textbook.status = TextbookStatus.completed
             textbook.error_message = None
             textbook.summary = (
-                f"所有失败文本块已恢复，当前共生成 {textbook.card_count} 张卡片，"
+                f"所有失败段落已恢复，当前共生成 {textbook.card_count} 张卡片，"
                 f"跳过 {textbook.skipped_cards} 条。"
             )
         else:
             textbook.status = TextbookStatus.failed
-            textbook.error_message = f"仍有 {textbook.failed_chunks} 个文本块需要重试。"
+            textbook.error_message = f"仍有 {textbook.failed_chunks} 个段落需要重试。"
             textbook.summary = (
-                f"已重试 1 个失败文本块，仍剩 {textbook.failed_chunks} 个待处理，"
+                f"已重试 1 个失败段落，仍剩 {textbook.failed_chunks} 个待处理，"
                 f"当前共生成 {textbook.card_count} 张卡片。"
             )
 
@@ -273,21 +273,22 @@ class TextbookImporter:
     async def _process_chunk(
         self,
         textbook: Textbook,
-        chunk_index: int,
-        chunk: str,
+        chunk: ParagraphChunk,
         failure: ImportChunkFailure | None = None,
     ) -> tuple[int, int]:
         try:
             raw_cards = await self.llm.extract_cards(chunk)
-            return self._persist_cards(textbook, raw_cards)
+            return self._persist_cards(textbook, raw_cards, chunk)
         except Exception as exc:
             if failure is None:
                 self.db.add(
                     ImportChunkFailure(
                         textbook_id=textbook.id,
-                        chunk_index=chunk_index,
-                        chunk_text=chunk,
-                        chunk_excerpt=chunk[:1000],
+                        chunk_index=chunk.index,
+                        page_number=chunk.page_number,
+                        section_path=chunk.section_path,
+                        chunk_text=chunk.text,
+                        chunk_excerpt=chunk.excerpt,
                         error_message=str(exc),
                     )
                 )
@@ -296,13 +297,18 @@ class TextbookImporter:
                 return 0, 0
             raise ImportErrorWithMessage(str(exc)) from exc
 
-    def _persist_cards(self, textbook: Textbook, raw_cards: list[dict[str, str]]) -> tuple[int, int]:
+    def _persist_cards(
+        self,
+        textbook: Textbook,
+        raw_cards: list[dict[str, str]],
+        chunk: ParagraphChunk,
+    ) -> tuple[int, int]:
         imported = 0
         skipped = 0
         local_seen: dict[str, list[str]] = {}
         existing_by_chapter: dict[str, list[str]] = {}
         for raw_card in raw_cards:
-            cleaned = self._clean_card(raw_card)
+            cleaned = self._clean_card(raw_card, chunk)
             if not cleaned:
                 skipped += 1
                 continue
@@ -325,21 +331,66 @@ class TextbookImporter:
         self.db.commit()
         return imported, skipped
 
-    def _clean_card(self, raw_card: dict[str, str]) -> dict[str, str] | None:
-        concept_name = " ".join(raw_card.get("concept_name", "").split())[:255]
-        summary = " ".join(raw_card.get("summary", "").split())[: self.settings.extraction_summary_limit]
-        chapter = " ".join(raw_card.get("chapter", "").split())[:255] or "Uncategorized"
-        source_excerpt = " ".join(raw_card.get("source_excerpt", "").split())[: self.settings.source_excerpt_limit]
+    def _clean_card(self, raw_card: dict[str, str], chunk: ParagraphChunk) -> dict[str, str] | None:
+        concept_name = " ".join(str(raw_card.get("concept_name", "")).split())[:255]
+        english_name = " ".join(str(raw_card.get("english_name", "")).split())[:255] or None
+        summary = " ".join(str(raw_card.get("summary", "")).split())[: self.settings.extraction_summary_limit]
+        chapter = " ".join(str(raw_card.get("chapter", "")).split())[:255] or chunk.section_path or "Uncategorized"
+        source_excerpt = " ".join(str(raw_card.get("source_excerpt", "")).split())[: self.settings.source_excerpt_limit]
+        page_number = self._parse_page_number(raw_card.get("page_number"))
+        if page_number is None:
+            page_number = chunk.page_number
         if not concept_name or not summary or len(summary) < 8:
             return None
+        if self._looks_like_heading(concept_name, summary, source_excerpt, chunk):
+            return None
         if not source_excerpt:
-            source_excerpt = summary
+            source_excerpt = chunk.text[: self.settings.source_excerpt_limit] or summary
         return {
             "concept_name": concept_name,
+            "english_name": english_name,
             "summary": summary,
             "chapter": chapter,
+            "page_number": page_number,
             "source_excerpt": source_excerpt,
         }
+
+    def _build_chunk_from_failure(self, failure: ImportChunkFailure) -> ParagraphChunk:
+        return ParagraphChunk(
+            index=failure.chunk_index,
+            page_number=failure.page_number,
+            section_path=failure.section_path or "Uncategorized",
+            text=failure.chunk_text or failure.chunk_excerpt,
+        )
+
+    def _parse_page_number(self, value: object) -> int | None:
+        if isinstance(value, int):
+            return value if value > 0 else None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.isdigit():
+                parsed = int(stripped)
+                return parsed if parsed > 0 else None
+        return None
+
+    def _looks_like_heading(
+        self,
+        concept_name: str,
+        summary: str,
+        source_excerpt: str,
+        chunk: ParagraphChunk,
+    ) -> bool:
+        normalized_excerpt = self._normalize_heading_text(source_excerpt or chunk.text)
+        normalized_title = self._normalize_heading_text(concept_name)
+        normalized_summary = self._normalize_heading_text(summary)
+        if normalized_excerpt and normalized_excerpt == normalized_title:
+            return True
+        if normalized_excerpt and normalized_excerpt == normalized_summary:
+            return True
+        return False
+
+    def _normalize_heading_text(self, value: str) -> str:
+        return re.sub(r"\s+", "", value).casefold()
 
     def _load_existing_concepts(self, textbook_id: int, chapter: str) -> list[str]:
         stmt = select(Card.concept_name).where(
@@ -365,3 +416,12 @@ class TextbookImporter:
 
     def _normalize_concept(self, value: str) -> str:
         return re.sub(r"[\W_]+", "", value).casefold()
+
+    def _purge_existing_textbooks(self) -> None:
+        textbooks = list(self.db.scalars(select(Textbook)).all())
+        for textbook in textbooks:
+            stored_path = Path(textbook.stored_path)
+            if stored_path.exists():
+                stored_path.unlink(missing_ok=True)
+            self.db.delete(textbook)
+        self.db.commit()

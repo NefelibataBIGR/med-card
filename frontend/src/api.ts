@@ -44,7 +44,11 @@ export async function resetSession(sessionId: string): Promise<void> {
   await request(`/api/sessions/${sessionId}/reset`, { method: 'POST' })
 }
 
-export async function updateCard(sessionId: string | undefined, cardId: number, payload: Partial<Card>): Promise<Card> {
+export async function updateCard(
+  sessionId: string | undefined,
+  cardId: number,
+  payload: Partial<Card> | Record<string, unknown>,
+): Promise<Card> {
   const headers: HeadersInit = { 'Content-Type': 'application/json' }
   if (sessionId) {
     headers['X-Session-Id'] = sessionId
@@ -56,7 +60,11 @@ export async function updateCard(sessionId: string | undefined, cardId: number, 
   })
 }
 
-export async function markCard(sessionId: string | undefined, cardId: number, action: 'mark-familiar' | 'mark-uncertain' | 'ignore'): Promise<Card> {
+export async function markCard(
+  sessionId: string | undefined,
+  cardId: number,
+  action: 'mark-familiar' | 'mark-uncertain' | 'ignore',
+): Promise<Card> {
   const headers = sessionId ? { 'X-Session-Id': sessionId } : undefined
   return request<Card>(`/api/cards/${cardId}/${action}`, {
     method: 'POST',

@@ -5,6 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import get_settings
 from app.core.database import Base, get_db
 from app.main import create_app
 from app.models import Card, CardStatus, Textbook, TextbookStatus
@@ -113,7 +114,11 @@ def test_delete_card_excludes_it_from_draws() -> None:
     assert second_draw.json()["card"]["id"] != first_card_id
 
 
-def test_import_endpoint_validates_missing_configuration() -> None:
+def test_import_endpoint_validates_missing_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("MED_CARD_LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("MED_CARD_LLM_API_KEY", "")
+    get_settings.cache_clear()
+
     db = build_session()
     client = build_client(db)
 
@@ -124,6 +129,7 @@ def test_import_endpoint_validates_missing_configuration() -> None:
 
     assert response.status_code == 400
     assert "MED_CARD_LLM_API_KEY" in response.json()["detail"]
+    get_settings.cache_clear()
 
 
 def test_list_textbook_failures_returns_records() -> None:

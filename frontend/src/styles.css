@@ -238,6 +238,12 @@ textarea {
   color: var(--muted);
 }
 
+.meta {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .listItem blockquote {
   margin: 0.8rem 0 1rem;
   padding-left: 0.9rem;
@@ -271,6 +277,10 @@ textarea {
 .chapter {
   color: var(--accent-dark);
   font-weight: 600;
+}
+
+.cardView .hint + .hint {
+  margin-top: 0.25rem;
 }
 
 .cardView blockquote {

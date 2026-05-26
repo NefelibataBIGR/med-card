@@ -43,6 +43,17 @@ def ensure_schema() -> None:
             if column_name not in textbook_columns:
                 connection.execute(text(ddl))
 
+    if "cards" in inspector.get_table_names():
+        card_columns = {column["name"] for column in inspector.get_columns("cards")}
+        card_required_columns = {
+            "english_name": "ALTER TABLE cards ADD COLUMN english_name VARCHAR(255)",
+            "page_number": "ALTER TABLE cards ADD COLUMN page_number INTEGER",
+        }
+        with engine.begin() as connection:
+            for column_name, ddl in card_required_columns.items():
+                if column_name not in card_columns:
+                    connection.execute(text(ddl))
+
     if "import_chunk_failures" in inspector.get_table_names():
         failure_columns = {column["name"] for column in inspector.get_columns("import_chunk_failures")}
         failure_required_columns = {
@@ -50,6 +61,8 @@ def ensure_schema() -> None:
             "retry_count": "ALTER TABLE import_chunk_failures ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
             "resolved": "ALTER TABLE import_chunk_failures ADD COLUMN resolved BOOLEAN NOT NULL DEFAULT 0",
             "updated_at": "ALTER TABLE import_chunk_failures ADD COLUMN updated_at DATETIME",
+            "page_number": "ALTER TABLE import_chunk_failures ADD COLUMN page_number INTEGER",
+            "section_path": "ALTER TABLE import_chunk_failures ADD COLUMN section_path VARCHAR(255)",
         }
         with engine.begin() as connection:
             for column_name, ddl in failure_required_columns.items():

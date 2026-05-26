@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import httpx
 
 from ..core.config import get_settings
+from .text_extraction import ParagraphChunk
 
 
 class MissingLLMConfigurationError(RuntimeError):
@@ -23,49 +25,45 @@ class LLMClient:
                 "缺少 MED_CARD_LLM_API_KEY，请先在 .env 中完成配置后再导入 PDF。"
             )
 
-    async def extract_cards(self, chunk: str) -> list[dict[str, str]]:
+    async def extract_cards(self, chunk: ParagraphChunk) -> list[dict[str, str]]:
         provider = self.settings.llm_provider.strip().lower()
         if provider == "mock":
             return self._extract_mock(chunk)
         self.validate_configuration()
         return await self._extract_openai_compatible(chunk)
 
-    def _extract_mock(self, chunk: str) -> list[dict[str, str]]:
-        cards: list[dict[str, str]] = []
-        chapter = "Uncategorized"
-        chapter_tokens = ("\u7b2c", "\u7ae0", "\u8282")
-        trim_chars = "\uff1a:;\uff1b\uff0c,\u3002 "
+    def _extract_mock(self, chunk: ParagraphChunk) -> list[dict[str, str]]:
+        paragraph = " ".join(chunk.text.split())
+        if len(paragraph) < 16:
+            return []
 
-        for raw_line in chunk.splitlines():
-            line = " ".join(raw_line.split())
-            if not line:
-                continue
-            if len(line) <= 40 and any(token in line for token in chapter_tokens):
-                chapter = line[:255]
-                continue
-            if len(line) < 30:
-                continue
-            concept_name = line[:32].strip(trim_chars)
-            summary = line[: self.settings.extraction_summary_limit]
-            cards.append(
-                {
-                    "concept_name": concept_name or "Untitled Concept",
-                    "summary": summary,
-                    "chapter": chapter,
-                    "source_excerpt": line[: self.settings.source_excerpt_limit],
-                }
-            )
-            if len(cards) >= 12:
-                break
-        return cards
+        concept_name, english_name, summary = self._infer_concept_from_paragraph(paragraph)
+        if not concept_name or not summary:
+            return []
 
-    async def _extract_openai_compatible(self, chunk: str) -> list[dict[str, str]]:
+        return [
+            {
+                "concept_name": concept_name,
+                "english_name": english_name,
+                "summary": summary,
+                "chapter": chunk.section_path,
+                "page_number": str(chunk.page_number),
+                "source_excerpt": chunk.text[: self.settings.source_excerpt_limit],
+            }
+        ]
+
+    async def _extract_openai_compatible(self, chunk: ParagraphChunk) -> list[dict[str, str]]:
         prompt = (
-            "You extract revision cards from medical textbook text. "
+            "You extract one medical concept revision card from a single textbook paragraph. "
             "Return strict JSON only. "
             "Prefer a top-level object with a cards array. "
-            "Each item must include concept_name, summary, chapter, and source_excerpt as strings. "
-            "Keep summary concise and under 180 Chinese characters."
+            "Do not create cards for chapter or section headings. "
+            "At most one card should be returned. "
+            "The card must represent the main anatomical or medical concept introduced in the paragraph. "
+            "Each item must include concept_name, english_name, summary, chapter, page_number, and source_excerpt. "
+            "english_name may be empty if absent. "
+            "summary should be a concise concept introduction under 180 Chinese characters and should not repeat the title. "
+            "source_excerpt should be copied from the paragraph rather than invented."
         )
         payload: dict[str, Any] = {
             "model": self.settings.llm_model,
@@ -73,7 +71,14 @@ class LLMClient:
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Textbook excerpt:\n{chunk}"},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Section path: {chunk.section_path}\n"
+                        f"PDF page: {chunk.page_number}\n"
+                        f"Paragraph:\n{chunk.text}"
+                    ),
+                },
             ],
         }
         headers = {"Authorization": f"Bearer {self.settings.llm_api_key}"}
@@ -91,15 +96,52 @@ class LLMClient:
             raise ValueError("LLM response does not contain a valid card list.")
 
         normalized: list[dict[str, str]] = []
-        for item in raw_cards:
+        for item in raw_cards[:1]:
             if not isinstance(item, dict):
                 continue
             normalized.append(
                 {
                     "concept_name": str(item.get("concept_name", "")).strip(),
+                    "english_name": str(item.get("english_name", "")).strip(),
                     "summary": str(item.get("summary", "")).strip(),
                     "chapter": str(item.get("chapter", "")).strip(),
+                    "page_number": str(item.get("page_number", "")).strip(),
                     "source_excerpt": str(item.get("source_excerpt", "")).strip(),
                 }
             )
         return normalized
+
+    def _infer_concept_from_paragraph(self, paragraph: str) -> tuple[str, str, str]:
+        normalized = " ".join(paragraph.split())
+        match = self._match_bilingual_title(normalized)
+        if match:
+            concept_name = match.group("cn").strip(" ，,：:;；。")
+            english_name = match.group("en").strip()
+            summary = match.group("body").strip(" ，,：:;；。")
+            return (
+                concept_name[:255],
+                english_name[:255],
+                summary[: self.settings.extraction_summary_limit],
+            )
+
+        match = re.match(
+            r"^(?P<cn>[\u4e00-\u9fffA-Za-z0-9（）()·\-]{2,40})[：: ]+(?P<body>.+)$",
+            normalized,
+        )
+        if match:
+            concept_name = match.group("cn").strip(" ，,：:;；。")
+            summary = match.group("body").strip(" ，,：:;；。")
+            return concept_name[:255], "", summary[: self.settings.extraction_summary_limit]
+
+        pieces = re.split(r"[，,。；; ]", normalized, maxsplit=1)
+        concept_name = pieces[0].strip(" ，,：:;；。")[:255]
+        summary = normalized[len(pieces[0]) :].strip(" ，,：:;；。")[: self.settings.extraction_summary_limit]
+        return concept_name, "", summary
+
+    def _match_bilingual_title(self, text: str):
+        return re.match(
+            r"^(?P<cn>[\u4e00-\u9fffA-Za-z0-9（）()·\-]{2,40})\s+"
+            r"(?P<en>[A-Za-z][A-Za-z\s\-,'()/]{2,80})\s+"
+            r"(?P<body>.+)$",
+            text,
+        )
