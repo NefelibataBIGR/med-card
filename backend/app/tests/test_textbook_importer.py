@@ -115,3 +115,68 @@ def test_process_textbook_skips_highly_similar_concepts(monkeypatch) -> None:
     assert len(cards) == 1
     assert result.imported_cards == 1
     assert result.skipped_cards == 1
+
+
+def test_retry_failure_resolves_queue_and_updates_textbook(monkeypatch) -> None:
+    db = build_session()
+    importer = TextbookImporter(db)
+
+    textbook = Textbook(
+        filename="retry.pdf",
+        stored_path="retry.pdf",
+        status=TextbookStatus.pending,
+        summary="queued",
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    monkeypatch.setattr(importer, "_extract_chunks", lambda _path: ["chunk-1", "chunk-2"])
+
+    async def failing_extract(chunk: str) -> list[dict[str, str]]:
+        if chunk == "chunk-1":
+            return [
+                {
+                    "concept_name": "Stroke volume",
+                    "summary": "Volume ejected by a ventricle in one beat.",
+                    "chapter": "Circulation",
+                    "source_excerpt": "Definition one.",
+                }
+            ]
+        raise RuntimeError("temporary failure")
+
+    monkeypatch.setattr(importer.llm, "extract_cards", failing_extract)
+
+    import anyio
+
+    anyio.run(importer.process_textbook, textbook.id)
+
+    failure = db.scalars(select(ImportChunkFailure)).one()
+
+    async def success_extract(_chunk: str) -> list[dict[str, str]]:
+        return [
+            {
+                "concept_name": "Minute ventilation",
+                "summary": "Total air entering or leaving the lungs each minute.",
+                "chapter": "Respiration",
+                "source_excerpt": "Definition two.",
+            }
+        ]
+
+    monkeypatch.setattr(importer.llm, "extract_cards", success_extract)
+    result = anyio.run(importer.retry_failure, failure.id)
+
+    assert result.imported_cards == 1
+    assert result.skipped_cards == 0
+
+    refreshed_failure = db.get(ImportChunkFailure, failure.id)
+    assert refreshed_failure is not None
+    assert refreshed_failure.resolved is True
+    assert refreshed_failure.retry_count == 1
+
+    refreshed_textbook = db.get(Textbook, textbook.id)
+    assert refreshed_textbook is not None
+    assert refreshed_textbook.status == TextbookStatus.completed
+    assert refreshed_textbook.failed_chunks == 0
+    assert refreshed_textbook.card_count == 2
+    assert refreshed_textbook.error_message is None

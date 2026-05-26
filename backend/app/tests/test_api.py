@@ -124,3 +124,37 @@ def test_import_endpoint_validates_missing_configuration() -> None:
 
     assert response.status_code == 400
     assert "MED_CARD_LLM_API_KEY" in response.json()["detail"]
+
+
+def test_list_textbook_failures_returns_records() -> None:
+    db = build_session()
+    textbook = Textbook(
+        filename="sample.pdf",
+        stored_path="sample.pdf",
+        status=TextbookStatus.failed,
+        summary="failed",
+        failed_chunks=1,
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    from app.models import ImportChunkFailure
+
+    db.add(
+        ImportChunkFailure(
+            textbook_id=textbook.id,
+            chunk_index=2,
+            chunk_excerpt="chunk text",
+            error_message="failure",
+        )
+    )
+    db.commit()
+
+    client = build_client(db)
+    response = client.get(f"/api/textbooks/{textbook.id}/failures")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["chunk_index"] == 2

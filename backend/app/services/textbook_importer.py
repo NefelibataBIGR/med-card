@@ -9,11 +9,20 @@ from pathlib import Path
 
 from fastapi import UploadFile
 from pypdf import PdfReader
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
-from ..models import Card, CardStatus, ImportChunkFailure, Textbook, TextbookStatus, utc_now
+from ..models import (
+    Card,
+    CardStatus,
+    ImportChunkFailure,
+    ReviewAction,
+    ReviewLog,
+    Textbook,
+    TextbookStatus,
+    utc_now,
+)
 from .llm import LLMClient
 
 
@@ -24,11 +33,25 @@ class ImportResult:
     skipped_cards: int
 
 
+@dataclass
+class RetryResult:
+    textbook: Textbook
+    failure: ImportChunkFailure
+    imported_cards: int
+    skipped_cards: int
+
+
 class ImportErrorWithMessage(RuntimeError):
     pass
 
 
 class TextbookImporter:
+    _chapter_patterns = (
+        re.compile(r"^\s*第[一二三四五六七八九十百千0-9]+[章节篇部卷]\s*.*$"),
+        re.compile(r"^\s*Chapter\s+\d+[:.\s-].*$", re.IGNORECASE),
+        re.compile(r"^\s*[一二三四五六七八九十]+[、.．]\s*.+$"),
+    )
+
     def __init__(self, db: Session) -> None:
         self.db = db
         self.settings = get_settings()
@@ -86,30 +109,18 @@ class TextbookImporter:
             self.db.commit()
 
             for chunk_index, chunk in enumerate(chunks, start=1):
-                try:
-                    raw_cards = await self.llm.extract_cards(chunk)
-                    imported, skipped = self._persist_cards(textbook, raw_cards)
-                    imported_cards += imported
-                    skipped_cards += skipped
-                except Exception as exc:
-                    self.db.add(
-                        ImportChunkFailure(
-                            textbook_id=textbook.id,
-                            chunk_index=chunk_index,
-                            chunk_excerpt=chunk[:1000],
-                            error_message=str(exc),
-                        )
-                    )
-                    textbook.failed_chunks += 1
-                finally:
-                    textbook.processed_chunks = chunk_index
-                    textbook.card_count = imported_cards
-                    textbook.skipped_cards = skipped_cards
-                    textbook.summary = (
-                        f"Processed {textbook.processed_chunks}/{textbook.total_chunks} chunks, "
-                        f"created {imported_cards} cards, skipped {skipped_cards}."
-                    )
-                    self.db.commit()
+                imported, skipped = await self._process_chunk(textbook, chunk_index, chunk)
+                imported_cards += imported
+                skipped_cards += skipped
+
+                textbook.processed_chunks = chunk_index
+                textbook.card_count = imported_cards
+                textbook.skipped_cards = skipped_cards
+                textbook.summary = (
+                    f"Processed {textbook.processed_chunks}/{textbook.total_chunks} chunks, "
+                    f"created {imported_cards} cards, skipped {skipped_cards}."
+                )
+                self.db.commit()
 
             textbook.processed_at = utc_now()
             textbook.card_count = imported_cards
@@ -139,31 +150,193 @@ class TextbookImporter:
             self.db.commit()
             raise
 
+    async def retry_failure(self, failure_id: int) -> RetryResult:
+        failure = self.db.get(ImportChunkFailure, failure_id)
+        if failure is None:
+            raise ImportErrorWithMessage("Import failure record was not found.")
+        if failure.resolved:
+            raise ImportErrorWithMessage("This import failure has already been resolved.")
+
+        textbook = self.db.get(Textbook, failure.textbook_id)
+        if textbook is None:
+            raise ImportErrorWithMessage("Textbook import record was not found.")
+
+        imported_cards, skipped_cards = await self._process_chunk(textbook, failure.chunk_index, failure.chunk_excerpt, failure)
+        self.db.refresh(failure)
+        failure.retry_count += 1
+        failure.resolved = True
+        failure.error_message = "Resolved by manual retry."
+        failure.updated_at = utc_now()
+        self.db.flush()
+
+        unresolved_failures = list(
+            self.db.scalars(
+                select(ImportChunkFailure).where(
+                    ImportChunkFailure.textbook_id == textbook.id,
+                    ImportChunkFailure.resolved.is_(False),
+                )
+            ).all()
+        )
+        textbook.failed_chunks = len(unresolved_failures)
+        textbook.card_count += imported_cards
+        textbook.skipped_cards += skipped_cards
+        if textbook.failed_chunks == 0:
+            textbook.status = TextbookStatus.completed
+            textbook.error_message = None
+            textbook.summary = (
+                f"All failed chunks resolved. {textbook.card_count} cards created, "
+                f"{textbook.skipped_cards} skipped."
+            )
+        else:
+            textbook.status = TextbookStatus.failed
+            textbook.error_message = f"{textbook.failed_chunks} chunks still need retry."
+            textbook.summary = (
+                f"Retried one failed chunk. {textbook.failed_chunks} failed chunks remain, "
+                f"{textbook.card_count} cards created."
+            )
+
+        self.db.add(
+            ReviewLog(
+                card_id=None,
+                session_id=f"textbook:{textbook.id}",
+                action=ReviewAction.retry_import_chunk,
+                note=f"retry failure {failure.id}",
+            )
+        )
+        self.db.commit()
+        self.db.refresh(textbook)
+        self.db.refresh(failure)
+        return RetryResult(textbook=textbook, failure=failure, imported_cards=imported_cards, skipped_cards=skipped_cards)
+
+    def list_failures(self, textbook_id: int) -> list[ImportChunkFailure]:
+        stmt = select(ImportChunkFailure).where(
+            ImportChunkFailure.textbook_id == textbook_id,
+            ImportChunkFailure.resolved.is_(False),
+        )
+        return list(self.db.scalars(stmt.order_by(ImportChunkFailure.chunk_index.asc())).all())
+
+    async def _process_chunk(
+        self,
+        textbook: Textbook,
+        chunk_index: int,
+        chunk: str,
+        failure: ImportChunkFailure | None = None,
+    ) -> tuple[int, int]:
+        try:
+            raw_cards = await self.llm.extract_cards(chunk)
+            return self._persist_cards(textbook, raw_cards)
+        except Exception as exc:
+            if failure is None:
+                self.db.add(
+                    ImportChunkFailure(
+                        textbook_id=textbook.id,
+                        chunk_index=chunk_index,
+                        chunk_excerpt=chunk[:1000],
+                        error_message=str(exc),
+                    )
+                )
+                textbook.failed_chunks += 1
+                self.db.commit()
+                return 0, 0
+            raise ImportErrorWithMessage(str(exc)) from exc
+
     def _extract_chunks(self, pdf_path: Path) -> list[str]:
         reader = PdfReader(str(pdf_path))
-        pages: list[str] = []
+        paragraphs: list[str] = []
+        current_chapter = "Uncategorized"
+        started_content = False
+
         for page in reader.pages:
             text = page.extract_text() or ""
-            normalized = re.sub(r"\s+", " ", text).strip()
-            if normalized:
-                pages.append(normalized)
-        if not pages:
+            for paragraph in self._extract_paragraphs(text):
+                if not paragraph:
+                    continue
+                if self._is_noise_paragraph(paragraph) and not started_content:
+                    continue
+                started_content = True
+                if self._is_chapter_heading(paragraph):
+                    current_chapter = paragraph
+                    paragraphs.append(f"## {current_chapter}")
+                    continue
+                paragraphs.append(f"[{current_chapter}] {paragraph}")
+
+        if not paragraphs:
             raise ImportErrorWithMessage("No text layer was found in the PDF. OCR is not implemented in this version.")
 
+        return self._group_paragraphs(paragraphs)
+
+    def _extract_paragraphs(self, text: str) -> list[str]:
+        lines = [self._normalize_line(line) for line in text.splitlines()]
+        lines = [line for line in lines if line]
+        paragraphs: list[str] = []
+        current: list[str] = []
+
+        for line in lines:
+            if self._is_noise_paragraph(line):
+                if current:
+                    paragraphs.append(" ".join(current))
+                    current = []
+                continue
+            if self._is_chapter_heading(line):
+                if current:
+                    paragraphs.append(" ".join(current))
+                    current = []
+                paragraphs.append(line)
+                continue
+
+            current.append(line)
+            paragraph_length = sum(len(item) for item in current)
+            if paragraph_length >= self.settings.extraction_paragraph_limit or line.endswith(("。", ".", ";", "；", "!", "！", "?", "？")):
+                paragraphs.append(" ".join(current))
+                current = []
+
+        if current:
+            paragraphs.append(" ".join(current))
+        return paragraphs
+
+    def _group_paragraphs(self, paragraphs: list[str]) -> list[str]:
         chunks: list[str] = []
-        buffer: list[str] = []
+        current: list[str] = []
         size = 0
-        for page_text in pages:
-            if buffer and size + len(page_text) > self.settings.extraction_chunk_size:
-                chunks.append("\n".join(buffer))
-                buffer = [page_text]
-                size = len(page_text)
+
+        for paragraph in paragraphs:
+            is_heading = paragraph.startswith("## ")
+            paragraph_size = len(paragraph)
+            if current and (is_heading or size + paragraph_size > self.settings.extraction_chunk_size):
+                chunks.append("\n".join(current))
+                current = [paragraph]
+                size = paragraph_size
             else:
-                buffer.append(page_text)
-                size += len(page_text)
-        if buffer:
-            chunks.append("\n".join(buffer))
+                current.append(paragraph)
+                size += paragraph_size
+
+        if current:
+            chunks.append("\n".join(current))
         return chunks
+
+    def _normalize_line(self, line: str) -> str:
+        line = line.replace("\u3000", " ")
+        line = re.sub(r"\s+", " ", line).strip()
+        return line
+
+    def _is_noise_paragraph(self, text: str) -> bool:
+        stripped = text.strip()
+        if not stripped:
+            return True
+        if len(stripped) <= 2 and stripped.isdigit():
+            return True
+        if re.fullmatch(r"[0-9\s]+", stripped):
+            return True
+        if any(token in stripped for token in ("ISBN", "www.", "pmph.com", "定价", "购书热线", "CIP", "版权所有")):
+            return True
+        weird_ratio = sum(1 for char in stripped if ord(char) < 32 and char not in ("\t", "\n", "\r")) / len(stripped)
+        return weird_ratio > 0.08
+
+    def _is_chapter_heading(self, text: str) -> bool:
+        stripped = text.strip()
+        if len(stripped) > 80:
+            return False
+        return any(pattern.match(stripped) for pattern in self._chapter_patterns)
 
     def _persist_cards(self, textbook: Textbook, raw_cards: list[dict[str, str]]) -> tuple[int, int]:
         imported = 0

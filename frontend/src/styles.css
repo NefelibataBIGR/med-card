@@ -216,6 +216,13 @@ textarea {
   color: var(--muted);
 }
 
+.listItem blockquote {
+  margin: 0.8rem 0 1rem;
+  padding-left: 0.9rem;
+  border-left: 3px solid rgba(191, 74, 39, 0.24);
+  color: var(--ink-soft);
+}
+
 .stacked {
   display: block;
 }

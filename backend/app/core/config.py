@@ -23,6 +23,7 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://127.0.0.1:5173", "http://localhost:5173"]
     )
     extraction_chunk_size: int = 5_000
+    extraction_paragraph_limit: int = 1_200
     extraction_summary_limit: int = 180
     source_excerpt_limit: int = 2_000
 

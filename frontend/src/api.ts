@@ -1,4 +1,12 @@
-import type { Card, DrawResponse, PoolResponse, Textbook, TextbookEnqueueResponse } from './types'
+import type {
+  Card,
+  DrawResponse,
+  ImportChunkFailure,
+  ImportChunkRetryResponse,
+  PoolResponse,
+  Textbook,
+  TextbookEnqueueResponse,
+} from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -66,4 +74,14 @@ export async function deleteCard(sessionId: string | undefined, cardId: number):
 export async function fetchPool(kind: 'familiar' | 'uncertain', query = ''): Promise<PoolResponse> {
   const url = query ? `/api/pools/${kind}?q=${encodeURIComponent(query)}` : `/api/pools/${kind}`
   return request<PoolResponse>(url)
+}
+
+export async function listImportFailures(textbookId: number): Promise<ImportChunkFailure[]> {
+  return request<ImportChunkFailure[]>(`/api/textbooks/${textbookId}/failures`)
+}
+
+export async function retryImportFailure(textbookId: number, failureId: number): Promise<ImportChunkRetryResponse> {
+  return request<ImportChunkRetryResponse>(`/api/textbooks/${textbookId}/failures/${failureId}/retry`, {
+    method: 'POST',
+  })
 }

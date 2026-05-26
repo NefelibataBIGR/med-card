@@ -45,3 +45,22 @@ export interface TextbookEnqueueResponse {
   textbook: Textbook
   message: string
 }
+
+export interface ImportChunkFailure {
+  id: number
+  textbook_id: number
+  chunk_index: number
+  chunk_excerpt: string
+  error_message: string
+  retry_count: number
+  resolved: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ImportChunkRetryResponse {
+  textbook: Textbook
+  failure: ImportChunkFailure
+  imported_cards: number
+  skipped_cards: number
+}

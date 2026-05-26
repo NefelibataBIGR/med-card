@@ -35,6 +35,7 @@ class ReviewAction(str, Enum):
     edit = "edit"
     delete = "delete"
     reset_session = "reset_session"
+    retry_import_chunk = "retry_import_chunk"
 
 
 class Textbook(Base):

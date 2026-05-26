@@ -6,7 +6,16 @@ from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..models import Card, CardStatus, ReviewAction, ReviewLog, Textbook
-from ..schemas import CardRead, CardUpdate, DrawResponse, PoolResponse, TextbookEnqueueResponse, TextbookRead
+from ..schemas import (
+    CardRead,
+    CardUpdate,
+    DrawResponse,
+    ImportChunkFailureRead,
+    ImportChunkRetryResponse,
+    PoolResponse,
+    TextbookEnqueueResponse,
+    TextbookRead,
+)
 from ..services.llm import MissingLLMConfigurationError
 from ..services.review import ReviewService
 from ..services.textbook_importer import ImportErrorWithMessage, TextbookImporter
@@ -57,6 +66,37 @@ async def import_textbook(
 @router.get("/textbooks", response_model=list[TextbookRead])
 def list_textbooks(db: Session = Depends(get_db)) -> list[Textbook]:
     return list(db.scalars(select(Textbook).order_by(Textbook.imported_at.desc())).all())
+
+
+@router.get("/textbooks/{textbook_id}/failures", response_model=list[ImportChunkFailureRead])
+def list_textbook_failures(textbook_id: int, db: Session = Depends(get_db)) -> list[ImportChunkFailureRead]:
+    textbook = db.get(Textbook, textbook_id)
+    if textbook is None:
+        raise HTTPException(status_code=404, detail="Textbook not found.")
+    return TextbookImporter(db).list_failures(textbook_id)
+
+
+@router.post("/textbooks/{textbook_id}/failures/{failure_id}/retry", response_model=ImportChunkRetryResponse)
+async def retry_textbook_failure(
+    textbook_id: int,
+    failure_id: int,
+    db: Session = Depends(get_db),
+) -> ImportChunkRetryResponse:
+    textbook = db.get(Textbook, textbook_id)
+    if textbook is None:
+        raise HTTPException(status_code=404, detail="Textbook not found.")
+    try:
+        result = await TextbookImporter(db).retry_failure(failure_id)
+    except ImportErrorWithMessage as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result.textbook.id != textbook_id:
+        raise HTTPException(status_code=400, detail="Failure record does not belong to this textbook.")
+    return ImportChunkRetryResponse(
+        textbook=result.textbook,
+        failure=result.failure,
+        imported_cards=result.imported_cards,
+        skipped_cards=result.skipped_cards,
+    )
 
 
 @router.get("/cards/draw", response_model=DrawResponse)

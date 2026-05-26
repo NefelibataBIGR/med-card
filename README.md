@@ -58,6 +58,8 @@ npm run dev
 
 - `POST /api/textbooks/import`
 - `GET /api/textbooks`
+- `GET /api/textbooks/{textbook_id}/failures`
+- `POST /api/textbooks/{textbook_id}/failures/{failure_id}/retry`
 - `GET /api/cards/draw`
 - `POST /api/sessions/{session_id}/reset`
 - `PATCH /api/cards/{id}`
@@ -83,3 +85,9 @@ $env:PYTHONPATH='backend'
 cd frontend
 npm run build
 ```
+
+## Notes
+
+- Importing now runs in the background and updates textbook progress in SQLite.
+- Failed extraction chunks are stored and can be retried from the import page.
+- The first version still assumes a PDF with a text layer. OCR is not implemented yet.

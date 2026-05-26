@@ -65,3 +65,24 @@ class TextbookImportResponse(BaseModel):
 class TextbookEnqueueResponse(BaseModel):
     textbook: TextbookRead
     message: str
+
+
+class ImportChunkFailureRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    textbook_id: int
+    chunk_index: int
+    chunk_excerpt: str
+    error_message: str
+    retry_count: int
+    resolved: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ImportChunkRetryResponse(BaseModel):
+    textbook: TextbookRead
+    failure: ImportChunkFailureRead
+    imported_cards: int
+    skipped_cards: int

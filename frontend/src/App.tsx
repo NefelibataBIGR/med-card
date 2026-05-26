@@ -6,12 +6,14 @@ import {
   drawCard,
   fetchPool,
   importTextbook,
+  listImportFailures,
   listTextbooks,
   markCard,
   resetSession,
+  retryImportFailure,
   updateCard,
 } from './api'
-import type { Card, Textbook } from './types'
+import type { Card, ImportChunkFailure, Textbook } from './types'
 
 type TabKey = 'import' | 'draw' | 'pools'
 type PoolKey = 'familiar' | 'uncertain'
@@ -38,6 +40,9 @@ export function App() {
   const [poolQuery, setPoolQuery] = useState('')
   const [poolItems, setPoolItems] = useState<Card[]>([])
   const [isEditorOpen, setIsEditorOpen] = useState(false)
+  const [selectedTextbookId, setSelectedTextbookId] = useState<number | null>(null)
+  const [importFailures, setImportFailures] = useState<ImportChunkFailure[]>([])
+  const [retryingFailureId, setRetryingFailureId] = useState<number | null>(null)
 
   useEffect(() => {
     void refreshTextbooks()
@@ -75,6 +80,14 @@ export function App() {
     }
   }, [tab, poolKind, poolQuery])
 
+  useEffect(() => {
+    if (selectedTextbookId === null) {
+      setImportFailures([])
+      return
+    }
+    void refreshImportFailures(selectedTextbookId)
+  }, [selectedTextbookId])
+
   async function refreshTextbooks() {
     try {
       setTextbooks(await listTextbooks())
@@ -87,6 +100,14 @@ export function App() {
     try {
       const result = await fetchPool(kind, query)
       setPoolItems(result.items)
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
+  async function refreshImportFailures(textbookId: number) {
+    try {
+      setImportFailures(await listImportFailures(textbookId))
     } catch (err) {
       setError((err as Error).message)
     }
@@ -195,6 +216,21 @@ export function App() {
     }
   }
 
+  async function handleRetryFailure(textbookId: number, failureId: number) {
+    setRetryingFailureId(failureId)
+    setError('')
+    try {
+      await retryImportFailure(textbookId, failureId)
+      await refreshTextbooks()
+      await refreshImportFailures(textbookId)
+      setDrawMessage('Failed chunk retried.')
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setRetryingFailureId(null)
+    }
+  }
+
   return (
     <div className="shell">
       <header className="hero">
@@ -260,7 +296,36 @@ export function App() {
                     <div className="meta">
                       <span>{item.status}</span>
                       <span>{item.card_count} cards</span>
+                      <button className="ghost" onClick={() => setSelectedTextbookId(item.id)} type="button">
+                        {selectedTextbookId === item.id ? 'Viewing failures' : 'View failures'}
+                      </button>
                     </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+            <section className="panel">
+              <h2>Failed Chunks</h2>
+              {selectedTextbookId === null ? <p className="hint">Select an import record to inspect failed chunks.</p> : null}
+              {selectedTextbookId !== null && importFailures.length === 0 ? (
+                <p className="hint">No unresolved failed chunks for this import.</p>
+              ) : null}
+              <div className="list">
+                {importFailures.map((failure) => (
+                  <article className="listItem stacked" key={failure.id}>
+                    <div className="meta">
+                      <strong>Chunk {failure.chunk_index}</strong>
+                      <span>Retries {failure.retry_count}</span>
+                    </div>
+                    <p>{failure.error_message}</p>
+                    <blockquote>{failure.chunk_excerpt}</blockquote>
+                    <button
+                      disabled={retryingFailureId === failure.id}
+                      onClick={() => void handleRetryFailure(failure.textbook_id, failure.id)}
+                      type="button"
+                    >
+                      {retryingFailureId === failure.id ? 'Retrying...' : 'Retry Chunk'}
+                    </button>
                   </article>
                 ))}
               </div>
