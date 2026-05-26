@@ -231,3 +231,59 @@ def test_retry_failure_keeps_failure_open_when_retry_fails(monkeypatch) -> None:
     assert refreshed_failure.resolved is False
     assert refreshed_failure.retry_count == 1
     assert refreshed_failure.error_message == "retry failed again"
+
+
+def test_retry_all_failures_resolves_multiple_chunks(monkeypatch) -> None:
+    db = build_session()
+    importer = TextbookImporter(db)
+
+    textbook = Textbook(
+        filename="retry-all.pdf",
+        stored_path="retry-all.pdf",
+        status=TextbookStatus.pending,
+        summary="queued",
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1", "chunk-2", "chunk-3"])
+
+    async def failing_extract(chunk: str) -> list[dict[str, str]]:
+        if chunk == "chunk-1":
+            return [
+                {
+                    "concept_name": "Baseline concept",
+                    "summary": "Baseline concept summary for successful chunk.",
+                    "chapter": "General",
+                    "source_excerpt": "chunk one",
+                }
+            ]
+        raise RuntimeError(f"failed {chunk}")
+
+    monkeypatch.setattr(importer.llm, "extract_cards", failing_extract)
+
+    import anyio
+
+    anyio.run(importer.process_textbook, textbook.id)
+
+    async def success_extract(chunk: str) -> list[dict[str, str]]:
+        return [
+            {
+                "concept_name": f"Recovered {chunk}",
+                "summary": "Recovered summary for failed chunk.",
+                "chapter": "Recovered",
+                "source_excerpt": chunk,
+            }
+        ]
+
+    monkeypatch.setattr(importer.llm, "extract_cards", success_extract)
+    result = anyio.run(importer.retry_all_failures, textbook.id)
+
+    assert result.retried_count == 2
+    assert result.resolved_count == 2
+    assert result.remaining_failures == 0
+
+    refreshed_textbook = db.get(Textbook, textbook.id)
+    assert refreshed_textbook is not None
+    assert refreshed_textbook.status == TextbookStatus.completed

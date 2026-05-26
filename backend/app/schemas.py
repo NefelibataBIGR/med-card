@@ -86,3 +86,10 @@ class ImportChunkRetryResponse(BaseModel):
     failure: ImportChunkFailureRead
     imported_cards: int
     skipped_cards: int
+
+
+class ImportChunkRetryBatchResponse(BaseModel):
+    textbook: TextbookRead
+    retried_count: int
+    resolved_count: int
+    remaining_failures: int

@@ -158,3 +158,12 @@ def test_list_textbook_failures_returns_records() -> None:
     payload = response.json()
     assert len(payload) == 1
     assert payload[0]["chunk_index"] == 2
+
+
+def test_retry_all_textbook_failures_for_missing_textbook_returns_404() -> None:
+    db = build_session()
+    client = build_client(db)
+
+    response = client.post("/api/textbooks/999/failures/retry-all")
+
+    assert response.status_code == 404

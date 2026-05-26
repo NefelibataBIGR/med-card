@@ -10,6 +10,7 @@ import {
   listTextbooks,
   markCard,
   resetSession,
+  retryAllImportFailures,
   retryImportFailure,
   updateCard,
 } from './api'
@@ -43,6 +44,7 @@ export function App() {
   const [selectedTextbookId, setSelectedTextbookId] = useState<number | null>(null)
   const [importFailures, setImportFailures] = useState<ImportChunkFailure[]>([])
   const [retryingFailureId, setRetryingFailureId] = useState<number | null>(null)
+  const [retryingAllFailures, setRetryingAllFailures] = useState(false)
 
   useEffect(() => {
     void refreshTextbooks()
@@ -118,7 +120,7 @@ export function App() {
     const input = event.currentTarget.elements.namedItem('pdf') as HTMLInputElement | null
     const file = input?.files?.[0]
     if (!file) {
-      setError('Choose a PDF file first.')
+      setError('请先选择一个 PDF 文件。')
       return
     }
     setUploading(true)
@@ -164,7 +166,7 @@ export function App() {
       await resetSession(sessionId)
       setCurrentCard(null)
       setRoundComplete(false)
-      setDrawMessage('Round reset. Draw again when ready.')
+      setDrawMessage('本轮已重置，可以重新抽卡。')
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -182,11 +184,11 @@ export function App() {
       if (action === 'delete') {
         await deleteCard(sessionId || undefined, currentCard.id)
         setCurrentCard(null)
-        setDrawMessage('Card deleted.')
+        setDrawMessage('卡片已删除。')
       } else {
         const updated = await markCard(sessionId || undefined, currentCard.id, action)
         setCurrentCard(updated)
-        setDrawMessage('Card status updated.')
+        setDrawMessage('卡片状态已更新。')
       }
       await refreshPool(poolKind, poolQuery)
       await refreshTextbooks()
@@ -206,7 +208,7 @@ export function App() {
     try {
       const updated = await updateCard(sessionId || undefined, currentCard.id, editForm)
       setCurrentCard(updated)
-      setDrawMessage('Card content saved.')
+      setDrawMessage('卡片内容已保存。')
       setIsEditorOpen(false)
       await refreshPool(poolKind, poolQuery)
     } catch (err) {
@@ -223,11 +225,28 @@ export function App() {
       await retryImportFailure(textbookId, failureId)
       await refreshTextbooks()
       await refreshImportFailures(textbookId)
-      setDrawMessage('Failed chunk retried.')
+      setDrawMessage('失败文本块已重试。')
     } catch (err) {
       setError((err as Error).message)
     } finally {
       setRetryingFailureId(null)
+    }
+  }
+
+  async function handleRetryAllFailures(textbookId: number) {
+    setRetryingAllFailures(true)
+    setError('')
+    try {
+      const result = await retryAllImportFailures(textbookId)
+      await refreshTextbooks()
+      await refreshImportFailures(textbookId)
+      setDrawMessage(
+        `已重试 ${result.retried_count} 个失败块，成功恢复 ${result.resolved_count} 个，剩余 ${result.remaining_failures} 个。`,
+      )
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setRetryingAllFailures(false)
     }
   }
 
@@ -236,28 +255,27 @@ export function App() {
       <header className="hero">
         <div>
           <p className="eyebrow">Medical Revision Cards</p>
-          <h1>Med Card</h1>
+          <h1>医学教材抽卡复习</h1>
           <p className="lede">
-            Import a textbook PDF, extract revision cards, and review with uncertain cards first and no repeats
-            inside one round.
+            导入教材 PDF，抽取复习卡片，并按“模糊优先、单轮不重复”的规则推进复习。
           </p>
         </div>
         <div className="heroPanel">
-          <span>Current round</span>
-          <strong>{sessionId ? sessionId.slice(0, 8) : 'Not started'}</strong>
+          <span>当前轮次</span>
+          <strong>{sessionId ? sessionId.slice(0, 8) : '未开始'}</strong>
           <p>{drawMessage}</p>
         </div>
       </header>
 
       <nav className="tabs">
         <button className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')} type="button">
-          Import
+          导入页
         </button>
         <button className={tab === 'draw' ? 'active' : ''} onClick={() => setTab('draw')} type="button">
-          Draw
+          抽卡页
         </button>
         <button className={tab === 'pools' ? 'active' : ''} onClick={() => setTab('pools')} type="button">
-          Pools
+          卡池页
         </button>
       </nav>
 
@@ -267,37 +285,37 @@ export function App() {
         {tab === 'import' ? (
           <>
             <section className="panel">
-              <h2>Import Textbook</h2>
+              <h2>导入教材</h2>
               <form className="uploadForm" onSubmit={handleUpload}>
                 <input accept="application/pdf" name="pdf" type="file" />
                 <button disabled={uploading} type="submit">
-                  {uploading ? 'Importing...' : 'Upload and Extract'}
+                  {uploading ? '导入中...' : '上传并抽取'}
                 </button>
               </form>
               <p className="hint">
-                Configure `MED_CARD_LLM_API_KEY` in `.env`. For local smoke tests, switch the provider to `mock`.
+                在 `.env` 中配置 `MED_CARD_LLM_API_KEY`。本地烟测时可切换到 `mock` provider。
               </p>
             </section>
             <section className="panel">
-              <h2>Import History</h2>
+              <h2>导入记录</h2>
               <div className="list">
-                {textbooks.length === 0 ? <p className="hint">No imports yet.</p> : null}
+                {textbooks.length === 0 ? <p className="hint">暂时还没有导入记录。</p> : null}
                 {textbooks.map((item) => (
                   <article className="listItem" key={item.id}>
                     <div>
                       <strong>{item.filename}</strong>
-                      <p>{item.summary ?? 'Still processing or no summary available yet.'}</p>
+                      <p>{item.summary ?? '正在处理中，暂时还没有摘要。'}</p>
                       <p className="hint">
-                        Progress {item.processed_chunks}/{item.total_chunks || 0} chunks, {item.failed_chunks} failed,
-                        {item.skipped_cards} skipped
+                        进度 {item.processed_chunks}/{item.total_chunks || 0} 个文本块，失败 {item.failed_chunks} 个，
+                        跳过 {item.skipped_cards} 个
                       </p>
                       {item.error_message ? <p className="hint">{item.error_message}</p> : null}
                     </div>
                     <div className="meta">
                       <span>{item.status}</span>
-                      <span>{item.card_count} cards</span>
+                      <span>{item.card_count} 张卡片</span>
                       <button className="ghost" onClick={() => setSelectedTextbookId(item.id)} type="button">
-                        {selectedTextbookId === item.id ? 'Viewing failures' : 'View failures'}
+                        {selectedTextbookId === item.id ? '正在查看失败块' : '查看失败块'}
                       </button>
                     </div>
                   </article>
@@ -305,17 +323,24 @@ export function App() {
               </div>
             </section>
             <section className="panel">
-              <h2>Failed Chunks</h2>
-              {selectedTextbookId === null ? <p className="hint">Select an import record to inspect failed chunks.</p> : null}
+              <div className="sectionHeader">
+                <h2>失败文本块</h2>
+                {selectedTextbookId !== null ? (
+                  <button disabled={retryingAllFailures || importFailures.length === 0} onClick={() => void handleRetryAllFailures(selectedTextbookId)} type="button">
+                    {retryingAllFailures ? '批量重试中...' : '全部重试'}
+                  </button>
+                ) : null}
+              </div>
+              {selectedTextbookId === null ? <p className="hint">先选择一条导入记录，再查看失败文本块。</p> : null}
               {selectedTextbookId !== null && importFailures.length === 0 ? (
-                <p className="hint">No unresolved failed chunks for this import.</p>
+                <p className="hint">这条导入记录当前没有未解决的失败文本块。</p>
               ) : null}
               <div className="list">
                 {importFailures.map((failure) => (
                   <article className="listItem stacked" key={failure.id}>
                     <div className="meta">
-                      <strong>Chunk {failure.chunk_index}</strong>
-                      <span>Retries {failure.retry_count}</span>
+                      <strong>文本块 {failure.chunk_index}</strong>
+                      <span>已重试 {failure.retry_count} 次</span>
                     </div>
                     <p>{failure.error_message}</p>
                     <blockquote>{failure.chunk_excerpt}</blockquote>
@@ -324,7 +349,7 @@ export function App() {
                       onClick={() => void handleRetryFailure(failure.textbook_id, failure.id)}
                       type="button"
                     >
-                      {retryingFailureId === failure.id ? 'Retrying...' : 'Retry Chunk'}
+                      {retryingFailureId === failure.id ? '重试中...' : '重试该文本块'}
                     </button>
                   </article>
                 ))}
@@ -338,10 +363,10 @@ export function App() {
             <section className="panel cardPanel">
               <div className="cardToolbar">
                 <button disabled={loading} onClick={() => void handleDraw()} type="button">
-                  {loading ? 'Working...' : 'Draw Next'}
+                  {loading ? '处理中...' : '抽取下一张'}
                 </button>
                 <button disabled={!sessionId || loading} onClick={() => void handleResetRound()} type="button">
-                  Reset Round
+                  重置本轮
                 </button>
               </div>
 
@@ -355,28 +380,28 @@ export function App() {
                 </article>
               ) : (
                 <div className="emptyState">
-                  <p>{roundComplete ? 'This round is complete. Reset to start again.' : 'No card has been drawn yet.'}</p>
+                  <p>{roundComplete ? '本轮已完成，可重置后重新开始。' : '当前还没有抽出的卡片。'}</p>
                 </div>
               )}
             </section>
 
             <section className="panel">
-              <h2>Review Actions</h2>
+              <h2>卡片操作</h2>
               <div className="actionRow">
                 <button disabled={!currentCard || loading} onClick={() => void handleAction('mark-familiar')} type="button">
-                  Familiar
+                  熟悉
                 </button>
                 <button disabled={!currentCard || loading} onClick={() => void handleAction('mark-uncertain')} type="button">
-                  Uncertain
+                  模糊
                 </button>
                 <button disabled={!currentCard || loading} onClick={() => void handleAction('ignore')} type="button">
-                  Ignore
+                  忽略
                 </button>
                 <button disabled={!currentCard || loading} onClick={() => setIsEditorOpen(true)} type="button">
-                  Edit
+                  编辑
                 </button>
                 <button className="danger" disabled={!currentCard || loading} onClick={() => void handleAction('delete')} type="button">
-                  Delete
+                  删除
                 </button>
               </div>
             </section>
@@ -393,27 +418,27 @@ export function App() {
                     onClick={() => setPoolKind('uncertain')}
                     type="button"
                   >
-                    Uncertain
+                    模糊池
                   </button>
                   <button
                     className={poolKind === 'familiar' ? 'active' : ''}
                     onClick={() => setPoolKind('familiar')}
                     type="button"
                   >
-                    Familiar
+                    熟悉池
                   </button>
                 </div>
                 <input
-                  placeholder="Search concept, summary, or chapter"
+                  placeholder="搜索概念、释义或章节"
                   value={poolQuery}
                   onChange={(event) => setPoolQuery(event.target.value)}
                 />
               </div>
             </section>
             <section className="panel">
-              <h2>{poolKind === 'uncertain' ? 'Uncertain Pool' : 'Familiar Pool'}</h2>
+              <h2>{poolKind === 'uncertain' ? '模糊池' : '熟悉池'}</h2>
               <div className="list">
-                {poolItems.length === 0 ? <p className="hint">No cards in this pool.</p> : null}
+                {poolItems.length === 0 ? <p className="hint">当前卡池里没有卡片。</p> : null}
                 {poolItems.map((item) => (
                   <article className="listItem stacked" key={item.id}>
                     <div className="meta">
@@ -438,26 +463,26 @@ export function App() {
                 <h2>{currentCard.concept_name}</h2>
               </div>
               <button className="ghost" onClick={() => setIsEditorOpen(false)} type="button">
-                Close
+                关闭
               </button>
             </div>
             <div className="editGrid">
               <label>
-                Concept
+                概念名
                 <input
                   value={editForm.concept_name}
                   onChange={(event) => setEditForm((value) => ({ ...value, concept_name: event.target.value }))}
                 />
               </label>
               <label>
-                Chapter
+                章节
                 <input
                   value={editForm.chapter}
                   onChange={(event) => setEditForm((value) => ({ ...value, chapter: event.target.value }))}
                 />
               </label>
               <label className="full">
-                Summary
+                精简释义
                 <textarea
                   rows={4}
                   value={editForm.summary}
@@ -465,7 +490,7 @@ export function App() {
                 />
               </label>
               <label className="full">
-                Source Excerpt
+                原文片段
                 <textarea
                   rows={6}
                   value={editForm.source_excerpt}
@@ -477,10 +502,10 @@ export function App() {
             </div>
             <div className="modalActions">
               <button className="ghost" onClick={() => setIsEditorOpen(false)} type="button">
-                Cancel
+                取消
               </button>
               <button disabled={loading} onClick={() => void handleSaveEdit()} type="button">
-                Save Edits
+                保存编辑
               </button>
             </div>
           </div>

@@ -41,6 +41,14 @@ class RetryResult:
     skipped_cards: int
 
 
+@dataclass
+class RetryBatchResult:
+    textbook: Textbook
+    retried_count: int
+    resolved_count: int
+    remaining_failures: int
+
+
 class ImportErrorWithMessage(RuntimeError):
     pass
 
@@ -218,6 +226,32 @@ class TextbookImporter:
         self.db.refresh(textbook)
         self.db.refresh(failure)
         return RetryResult(textbook=textbook, failure=failure, imported_cards=imported_cards, skipped_cards=skipped_cards)
+
+    async def retry_all_failures(self, textbook_id: int) -> RetryBatchResult:
+        textbook = self.db.get(Textbook, textbook_id)
+        if textbook is None:
+            raise ImportErrorWithMessage("Textbook import record was not found.")
+
+        failures = self.list_failures(textbook_id)
+        retried_count = 0
+        resolved_count = 0
+
+        for failure in failures:
+            retried_count += 1
+            try:
+                result = await self.retry_failure(failure.id)
+            except ImportErrorWithMessage:
+                continue
+            if result.failure.resolved:
+                resolved_count += 1
+
+        self.db.refresh(textbook)
+        return RetryBatchResult(
+            textbook=textbook,
+            retried_count=retried_count,
+            resolved_count=resolved_count,
+            remaining_failures=textbook.failed_chunks,
+        )
 
     def list_failures(self, textbook_id: int) -> list[ImportChunkFailure]:
         stmt = select(ImportChunkFailure).where(

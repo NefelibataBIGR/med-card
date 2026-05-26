@@ -11,6 +11,7 @@ from ..schemas import (
     CardUpdate,
     DrawResponse,
     ImportChunkFailureRead,
+    ImportChunkRetryBatchResponse,
     ImportChunkRetryResponse,
     PoolResponse,
     TextbookEnqueueResponse,
@@ -96,6 +97,26 @@ async def retry_textbook_failure(
         failure=result.failure,
         imported_cards=result.imported_cards,
         skipped_cards=result.skipped_cards,
+    )
+
+
+@router.post("/textbooks/{textbook_id}/failures/retry-all", response_model=ImportChunkRetryBatchResponse)
+async def retry_all_textbook_failures(
+    textbook_id: int,
+    db: Session = Depends(get_db),
+) -> ImportChunkRetryBatchResponse:
+    textbook = db.get(Textbook, textbook_id)
+    if textbook is None:
+        raise HTTPException(status_code=404, detail="Textbook not found.")
+    try:
+        result = await TextbookImporter(db).retry_all_failures(textbook_id)
+    except ImportErrorWithMessage as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ImportChunkRetryBatchResponse(
+        textbook=result.textbook,
+        retried_count=result.retried_count,
+        resolved_count=result.resolved_count,
+        remaining_failures=result.remaining_failures,
     )
 
 

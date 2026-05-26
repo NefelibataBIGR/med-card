@@ -64,3 +64,10 @@ export interface ImportChunkRetryResponse {
   imported_cards: number
   skipped_cards: number
 }
+
+export interface ImportChunkRetryBatchResponse {
+  textbook: Textbook
+  retried_count: number
+  resolved_count: number
+  remaining_failures: number
+}

@@ -2,6 +2,7 @@ import type {
   Card,
   DrawResponse,
   ImportChunkFailure,
+  ImportChunkRetryBatchResponse,
   ImportChunkRetryResponse,
   PoolResponse,
   Textbook,
@@ -82,6 +83,12 @@ export async function listImportFailures(textbookId: number): Promise<ImportChun
 
 export async function retryImportFailure(textbookId: number, failureId: number): Promise<ImportChunkRetryResponse> {
   return request<ImportChunkRetryResponse>(`/api/textbooks/${textbookId}/failures/${failureId}/retry`, {
+    method: 'POST',
+  })
+}
+
+export async function retryAllImportFailures(textbookId: number): Promise<ImportChunkRetryBatchResponse> {
+  return request<ImportChunkRetryBatchResponse>(`/api/textbooks/${textbookId}/failures/retry-all`, {
     method: 'POST',
   })
 }
