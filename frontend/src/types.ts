@@ -10,6 +10,10 @@ export interface Textbook {
   summary: string | null
   error_message: string | null
   card_count: number
+  skipped_cards: number
+  total_chunks: number
+  processed_chunks: number
+  failed_chunks: number
 }
 
 export interface Card {
@@ -35,4 +39,9 @@ export interface PoolResponse {
   items: Card[]
   total: number
   query: string
+}
+
+export interface TextbookEnqueueResponse {
+  textbook: Textbook
+  message: string
 }

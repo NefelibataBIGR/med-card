@@ -16,6 +16,10 @@ class TextbookRead(BaseModel):
     summary: str | None
     error_message: str | None
     card_count: int
+    skipped_cards: int
+    total_chunks: int
+    processed_chunks: int
+    failed_chunks: int
 
 
 class CardRead(BaseModel):
@@ -56,3 +60,8 @@ class TextbookImportResponse(BaseModel):
     textbook: TextbookRead
     imported_cards: int
     skipped_cards: int
+
+
+class TextbookEnqueueResponse(BaseModel):
+    textbook: TextbookRead
+    message: str

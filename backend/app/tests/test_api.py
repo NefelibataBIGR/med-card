@@ -111,3 +111,16 @@ def test_delete_card_excludes_it_from_draws() -> None:
     second_draw = client.get("/api/cards/draw", headers={"X-Session-Id": session_id})
     assert second_draw.status_code == 200
     assert second_draw.json()["card"]["id"] != first_card_id
+
+
+def test_import_endpoint_validates_missing_configuration() -> None:
+    db = build_session()
+    client = build_client(db)
+
+    response = client.post(
+        "/api/textbooks/import",
+        files={"file": ("sample.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert response.status_code == 400
+    assert "MED_CARD_LLM_API_KEY" in response.json()["detail"]

@@ -1,4 +1,4 @@
-import type { Card, DrawResponse, PoolResponse, Textbook } from './types'
+import type { Card, DrawResponse, PoolResponse, Textbook, TextbookEnqueueResponse } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -17,10 +17,10 @@ export async function listTextbooks(): Promise<Textbook[]> {
   return request<Textbook[]>('/api/textbooks')
 }
 
-export async function importTextbook(file: File): Promise<void> {
+export async function importTextbook(file: File): Promise<TextbookEnqueueResponse> {
   const formData = new FormData()
   formData.append('file', file)
-  await request('/api/textbooks/import', {
+  return request<TextbookEnqueueResponse>('/api/textbooks/import', {
     method: 'POST',
     body: formData,
   })

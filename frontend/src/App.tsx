@@ -37,10 +37,24 @@ export function App() {
   const [poolKind, setPoolKind] = useState<PoolKey>('uncertain')
   const [poolQuery, setPoolQuery] = useState('')
   const [poolItems, setPoolItems] = useState<Card[]>([])
+  const [isEditorOpen, setIsEditorOpen] = useState(false)
 
   useEffect(() => {
     void refreshTextbooks()
   }, [])
+
+  useEffect(() => {
+    const hasActiveImport = textbooks.some((item) => item.status === 'pending' || item.status === 'processing')
+    if (!hasActiveImport) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      void refreshTextbooks()
+    }, 2000)
+
+    return () => window.clearInterval(timer)
+  }, [textbooks])
 
   useEffect(() => {
     if (currentCard) {
@@ -89,10 +103,10 @@ export function App() {
     setUploading(true)
     setError('')
     try {
-      await importTextbook(file)
+      const result = await importTextbook(file)
       await refreshTextbooks()
       event.currentTarget.reset()
-      setDrawMessage('Import completed. You can start drawing cards now.')
+      setDrawMessage(result.message)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -172,6 +186,7 @@ export function App() {
       const updated = await updateCard(sessionId || undefined, currentCard.id, editForm)
       setCurrentCard(updated)
       setDrawMessage('Card content saved.')
+      setIsEditorOpen(false)
       await refreshPool(poolKind, poolQuery)
     } catch (err) {
       setError((err as Error).message)
@@ -236,6 +251,11 @@ export function App() {
                     <div>
                       <strong>{item.filename}</strong>
                       <p>{item.summary ?? 'Still processing or no summary available yet.'}</p>
+                      <p className="hint">
+                        Progress {item.processed_chunks}/{item.total_chunks || 0} chunks, {item.failed_chunks} failed,
+                        {item.skipped_cards} skipped
+                      </p>
+                      {item.error_message ? <p className="hint">{item.error_message}</p> : null}
                     </div>
                     <div className="meta">
                       <span>{item.status}</span>
@@ -287,47 +307,13 @@ export function App() {
                 <button disabled={!currentCard || loading} onClick={() => void handleAction('ignore')} type="button">
                   Ignore
                 </button>
+                <button disabled={!currentCard || loading} onClick={() => setIsEditorOpen(true)} type="button">
+                  Edit
+                </button>
                 <button className="danger" disabled={!currentCard || loading} onClick={() => void handleAction('delete')} type="button">
                   Delete
                 </button>
               </div>
-              <div className="editGrid">
-                <label>
-                  Concept
-                  <input
-                    value={editForm.concept_name}
-                    onChange={(event) => setEditForm((value) => ({ ...value, concept_name: event.target.value }))}
-                  />
-                </label>
-                <label>
-                  Chapter
-                  <input
-                    value={editForm.chapter}
-                    onChange={(event) => setEditForm((value) => ({ ...value, chapter: event.target.value }))}
-                  />
-                </label>
-                <label className="full">
-                  Summary
-                  <textarea
-                    rows={4}
-                    value={editForm.summary}
-                    onChange={(event) => setEditForm((value) => ({ ...value, summary: event.target.value }))}
-                  />
-                </label>
-                <label className="full">
-                  Source Excerpt
-                  <textarea
-                    rows={5}
-                    value={editForm.source_excerpt}
-                    onChange={(event) =>
-                      setEditForm((value) => ({ ...value, source_excerpt: event.target.value }))
-                    }
-                  />
-                </label>
-              </div>
-              <button disabled={!currentCard || loading} onClick={() => void handleSaveEdit()} type="button">
-                Save Edits
-              </button>
             </section>
           </>
         ) : null}
@@ -377,6 +363,64 @@ export function App() {
           </>
         ) : null}
       </main>
+
+      {isEditorOpen && currentCard ? (
+        <div className="modalShell" role="dialog" aria-modal="true">
+          <div className="modalCard">
+            <div className="modalHeader">
+              <div>
+                <p className="eyebrow">Card Details</p>
+                <h2>{currentCard.concept_name}</h2>
+              </div>
+              <button className="ghost" onClick={() => setIsEditorOpen(false)} type="button">
+                Close
+              </button>
+            </div>
+            <div className="editGrid">
+              <label>
+                Concept
+                <input
+                  value={editForm.concept_name}
+                  onChange={(event) => setEditForm((value) => ({ ...value, concept_name: event.target.value }))}
+                />
+              </label>
+              <label>
+                Chapter
+                <input
+                  value={editForm.chapter}
+                  onChange={(event) => setEditForm((value) => ({ ...value, chapter: event.target.value }))}
+                />
+              </label>
+              <label className="full">
+                Summary
+                <textarea
+                  rows={4}
+                  value={editForm.summary}
+                  onChange={(event) => setEditForm((value) => ({ ...value, summary: event.target.value }))}
+                />
+              </label>
+              <label className="full">
+                Source Excerpt
+                <textarea
+                  rows={6}
+                  value={editForm.source_excerpt}
+                  onChange={(event) =>
+                    setEditForm((value) => ({ ...value, source_excerpt: event.target.value }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="modalActions">
+              <button className="ghost" onClick={() => setIsEditorOpen(false)} type="button">
+                Cancel
+              </button>
+              <button disabled={loading} onClick={() => void handleSaveEdit()} type="button">
+                Save Edits
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -16,14 +16,18 @@ class LLMClient:
     def __init__(self) -> None:
         self.settings = get_settings()
 
+    def validate_configuration(self) -> None:
+        provider = self.settings.llm_provider.strip().lower()
+        if provider != "mock" and not self.settings.llm_api_key:
+            raise MissingLLMConfigurationError(
+                "MED_CARD_LLM_API_KEY is missing. Set it in .env before importing PDFs."
+            )
+
     async def extract_cards(self, chunk: str) -> list[dict[str, str]]:
         provider = self.settings.llm_provider.strip().lower()
         if provider == "mock":
             return self._extract_mock(chunk)
-        if not self.settings.llm_api_key:
-            raise MissingLLMConfigurationError(
-                "MED_CARD_LLM_API_KEY is missing. Set it in .env before importing PDFs."
-            )
+        self.validate_configuration()
         return await self._extract_openai_compatible(chunk)
 
     def _extract_mock(self, chunk: str) -> list[dict[str, str]]:

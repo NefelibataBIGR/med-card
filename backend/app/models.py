@@ -51,8 +51,16 @@ class Textbook(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     card_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    skipped_cards: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_chunks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_chunks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_chunks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     cards: Mapped[list["Card"]] = relationship(back_populates="textbook", cascade="all, delete-orphan")
+    import_failures: Mapped[list["ImportChunkFailure"]] = relationship(
+        back_populates="textbook",
+        cascade="all, delete-orphan",
+    )
 
 
 class Card(Base):
@@ -99,3 +107,19 @@ class SessionState(Base):
     session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), nullable=False, index=True)
     drawn_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+
+
+class ImportChunkFailure(Base):
+    __tablename__ = "import_chunk_failures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    textbook_id: Mapped[int] = mapped_column(ForeignKey("textbooks.id"), nullable=False, index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_excerpt: Mapped[str] = mapped_column(Text, nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+    textbook: Mapped["Textbook"] = relationship(back_populates="import_failures")

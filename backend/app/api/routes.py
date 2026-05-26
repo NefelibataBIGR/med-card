@@ -1,17 +1,27 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Response, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..models import Card, CardStatus, ReviewAction, ReviewLog, Textbook
-from ..schemas import CardRead, CardUpdate, DrawResponse, PoolResponse, TextbookImportResponse, TextbookRead
+from ..schemas import CardRead, CardUpdate, DrawResponse, PoolResponse, TextbookEnqueueResponse, TextbookRead
 from ..services.llm import MissingLLMConfigurationError
 from ..services.review import ReviewService
 from ..services.textbook_importer import ImportErrorWithMessage, TextbookImporter
 
 router = APIRouter(prefix="/api")
+
+
+async def _run_import(textbook_id: int) -> None:
+    from ..core.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        await TextbookImporter(db).process_textbook(textbook_id)
+    finally:
+        db.close()
 
 
 def get_card_or_404(db: Session, card_id: int) -> Card:
@@ -21,11 +31,15 @@ def get_card_or_404(db: Session, card_id: int) -> Card:
     return card
 
 
-@router.post("/textbooks/import", response_model=TextbookImportResponse)
-async def import_textbook(file: UploadFile = File(...), db: Session = Depends(get_db)) -> TextbookImportResponse:
+@router.post("/textbooks/import", response_model=TextbookEnqueueResponse, status_code=202)
+async def import_textbook(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> TextbookEnqueueResponse:
     importer = TextbookImporter(db)
     try:
-        result = await importer.import_pdf(file)
+        textbook = importer.create_import(file)
     except MissingLLMConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ImportErrorWithMessage as exc:
@@ -33,10 +47,10 @@ async def import_textbook(file: UploadFile = File(...), db: Session = Depends(ge
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to import textbook: {exc}") from exc
 
-    return TextbookImportResponse(
-        textbook=result.textbook,
-        imported_cards=result.imported_cards,
-        skipped_cards=result.skipped_cards,
+    background_tasks.add_task(_run_import, textbook.id)
+    return TextbookEnqueueResponse(
+        textbook=textbook,
+        message="Import queued. Poll /api/textbooks for progress.",
     )
 
 
