@@ -17,7 +17,6 @@ import {
 import type { Card, ImportChunkFailure, Textbook } from './types'
 
 type TabKey = 'import' | 'draw' | 'pools'
-type PoolKey = 'familiar' | 'uncertain'
 
 const emptyCardForm = {
   concept_name: '',
@@ -37,9 +36,9 @@ export function App() {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const [editForm, setEditForm] = useState(emptyCardForm)
-  const [poolKind, setPoolKind] = useState<PoolKey>('uncertain')
   const [poolQuery, setPoolQuery] = useState('')
-  const [poolItems, setPoolItems] = useState<Card[]>([])
+  const [uncertainPoolItems, setUncertainPoolItems] = useState<Card[]>([])
+  const [familiarPoolItems, setFamiliarPoolItems] = useState<Card[]>([])
   const [isEditorOpen, setIsEditorOpen] = useState(false)
   const [selectedTextbookId, setSelectedTextbookId] = useState<number | null>(null)
   const [importFailures, setImportFailures] = useState<ImportChunkFailure[]>([])
@@ -78,9 +77,9 @@ export function App() {
 
   useEffect(() => {
     if (tab === 'pools') {
-      void refreshPool(poolKind, poolQuery)
+      void refreshPools(poolQuery)
     }
-  }, [tab, poolKind, poolQuery])
+  }, [tab, poolQuery])
 
   useEffect(() => {
     if (selectedTextbookId === null) {
@@ -98,13 +97,21 @@ export function App() {
     }
   }
 
-  async function refreshPool(kind: PoolKey, query: string) {
+  async function refreshPool(kind: 'uncertain' | 'familiar', query: string) {
     try {
       const result = await fetchPool(kind, query)
-      setPoolItems(result.items)
+      if (kind === 'uncertain') {
+        setUncertainPoolItems(result.items)
+      } else {
+        setFamiliarPoolItems(result.items)
+      }
     } catch (err) {
       setError((err as Error).message)
     }
+  }
+
+  async function refreshPools(query: string) {
+    await Promise.all([refreshPool('uncertain', query), refreshPool('familiar', query)])
   }
 
   async function refreshImportFailures(textbookId: number) {
@@ -190,7 +197,7 @@ export function App() {
         setCurrentCard(updated)
         setDrawMessage('卡片状态已更新。')
       }
-      await refreshPool(poolKind, poolQuery)
+      await refreshPools(poolQuery)
       await refreshTextbooks()
     } catch (err) {
       setError((err as Error).message)
@@ -210,7 +217,7 @@ export function App() {
       setCurrentCard(updated)
       setDrawMessage('卡片内容已保存。')
       setIsEditorOpen(false)
-      await refreshPool(poolKind, poolQuery)
+      await refreshPools(poolQuery)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -412,22 +419,7 @@ export function App() {
           <>
             <section className="panel">
               <div className="poolToolbar">
-                <div className="segmented">
-                  <button
-                    className={poolKind === 'uncertain' ? 'active' : ''}
-                    onClick={() => setPoolKind('uncertain')}
-                    type="button"
-                  >
-                    模糊池
-                  </button>
-                  <button
-                    className={poolKind === 'familiar' ? 'active' : ''}
-                    onClick={() => setPoolKind('familiar')}
-                    type="button"
-                  >
-                    熟悉池
-                  </button>
-                </div>
+                <p className="hint">同时浏览模糊池与熟悉池，支持统一搜索。</p>
                 <input
                   placeholder="搜索概念、释义或章节"
                   value={poolQuery}
@@ -435,19 +427,44 @@ export function App() {
                 />
               </div>
             </section>
-            <section className="panel">
-              <h2>{poolKind === 'uncertain' ? '模糊池' : '熟悉池'}</h2>
-              <div className="list">
-                {poolItems.length === 0 ? <p className="hint">当前卡池里没有卡片。</p> : null}
-                {poolItems.map((item) => (
-                  <article className="listItem stacked" key={item.id}>
-                    <div className="meta">
-                      <strong>{item.concept_name}</strong>
-                      <span>{item.chapter}</span>
-                    </div>
-                    <p>{item.summary}</p>
-                  </article>
-                ))}
+            <section className="panel poolPanel">
+              <div className="poolColumns">
+                <div className="poolColumn">
+                  <div className="sectionHeader">
+                    <h2>模糊池</h2>
+                    <span className="hint">{uncertainPoolItems.length} 张</span>
+                  </div>
+                  <div className="list">
+                    {uncertainPoolItems.length === 0 ? <p className="hint">模糊池当前没有卡片。</p> : null}
+                    {uncertainPoolItems.map((item) => (
+                      <article className="listItem stacked" key={`uncertain-${item.id}`}>
+                        <div className="meta">
+                          <strong>{item.concept_name}</strong>
+                          <span>{item.chapter}</span>
+                        </div>
+                        <p>{item.summary}</p>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+                <div className="poolColumn">
+                  <div className="sectionHeader">
+                    <h2>熟悉池</h2>
+                    <span className="hint">{familiarPoolItems.length} 张</span>
+                  </div>
+                  <div className="list">
+                    {familiarPoolItems.length === 0 ? <p className="hint">熟悉池当前没有卡片。</p> : null}
+                    {familiarPoolItems.map((item) => (
+                      <article className="listItem stacked" key={`familiar-${item.id}`}>
+                        <div className="meta">
+                          <strong>{item.concept_name}</strong>
+                          <span>{item.chapter}</span>
+                        </div>
+                        <p>{item.summary}</p>
+                      </article>
+                    ))}
+                  </div>
+                </div>
               </div>
             </section>
           </>

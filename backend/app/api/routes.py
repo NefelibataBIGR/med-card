@@ -128,13 +128,13 @@ def draw_card(db: Session = Depends(get_db), x_session_id: str | None = Header(d
             session_id=session_id,
             card=None,
             round_complete=True,
-            message="No more drawable cards in this round. Reset the round to start again.",
+            message="本轮可抽取卡片已完成，可重置后重新开始。",
         )
     return DrawResponse(
         session_id=session_id,
         card=card,
         round_complete=False,
-        message="Drew the next card.",
+        message="已抽取下一张卡片。",
     )
 
 
