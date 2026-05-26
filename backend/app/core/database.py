@@ -46,6 +46,7 @@ def ensure_schema() -> None:
     if "import_chunk_failures" in inspector.get_table_names():
         failure_columns = {column["name"] for column in inspector.get_columns("import_chunk_failures")}
         failure_required_columns = {
+            "chunk_text": "ALTER TABLE import_chunk_failures ADD COLUMN chunk_text TEXT",
             "retry_count": "ALTER TABLE import_chunk_failures ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
             "resolved": "ALTER TABLE import_chunk_failures ADD COLUMN resolved BOOLEAN NOT NULL DEFAULT 0",
             "updated_at": "ALTER TABLE import_chunk_failures ADD COLUMN updated_at DATETIME",

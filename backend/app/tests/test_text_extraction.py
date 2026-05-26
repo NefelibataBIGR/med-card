@@ -21,8 +21,8 @@ def test_text_extractor_groups_by_chapter_and_filters_noise(monkeypatch) -> None
         def __init__(self, _path: str) -> None:
             self.pages = [
                 FakePage("ISBN 123456\n1\n2\n"),
-                FakePage("第1章 总论\n这是第一段正文。这是第二句。\n"),
-                FakePage("第2章 呼吸\n这是呼吸相关的正文段落，应该进入新的章节块。\n"),
+                FakePage("第一章 总论\n这是第一段正文。这是第二句。\n"),
+                FakePage("第二章 呼吸\n这是呼吸相关的正文段落，应当进入新的章节块。\n"),
             ]
 
     monkeypatch.setattr("app.services.text_extraction.PdfReader", FakeReader)
@@ -30,9 +30,9 @@ def test_text_extractor_groups_by_chapter_and_filters_noise(monkeypatch) -> None
     chunks = extractor.extract_chunks(Path("fake.pdf"))
 
     assert len(chunks) == 2
-    assert chunks[0].startswith("## 第1章 总论")
+    assert chunks[0].startswith("## 第一章 总论")
     assert "ISBN" not in chunks[0]
-    assert chunks[1].startswith("## 第2章 呼吸")
+    assert chunks[1].startswith("## 第二章 呼吸")
 
 
 def test_text_extractor_raises_ocr_placeholder_when_no_text(monkeypatch) -> None:

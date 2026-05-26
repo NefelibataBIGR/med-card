@@ -62,7 +62,7 @@ class TextbookImporter:
 
     def create_import(self, upload: UploadFile) -> Textbook:
         if not upload.filename or not upload.filename.lower().endswith(".pdf"):
-            raise ImportErrorWithMessage("Only a single PDF file can be imported.")
+            raise ImportErrorWithMessage("一次只能导入一个 PDF 文件。")
 
         self.llm.validate_configuration()
 
@@ -77,7 +77,7 @@ class TextbookImporter:
             filename=upload.filename,
             stored_path=str(stored_path),
             status=TextbookStatus.pending,
-            summary="Import queued.",
+            summary="教材已加入导入队列。",
             skipped_cards=0,
             total_chunks=0,
             processed_chunks=0,
@@ -91,11 +91,11 @@ class TextbookImporter:
     async def process_textbook(self, textbook_id: int) -> ImportResult:
         textbook = self.db.get(Textbook, textbook_id)
         if textbook is None:
-            raise ImportErrorWithMessage("Textbook import record was not found.")
+            raise ImportErrorWithMessage("未找到教材导入记录。")
 
         textbook.status = TextbookStatus.processing
         textbook.error_message = None
-        textbook.summary = "Extracting text from PDF."
+        textbook.summary = "正在从 PDF 提取文本。"
         textbook.processed_chunks = 0
         textbook.failed_chunks = 0
         textbook.card_count = 0
@@ -108,7 +108,7 @@ class TextbookImporter:
         try:
             chunks = self.text_extractor.extract_chunks(Path(textbook.stored_path))
             textbook.total_chunks = len(chunks)
-            textbook.summary = f"Processing {len(chunks)} chunks."
+            textbook.summary = f"正在处理 {len(chunks)} 个文本块。"
             self.db.commit()
 
             for chunk_index, chunk in enumerate(chunks, start=1):
@@ -120,8 +120,8 @@ class TextbookImporter:
                 textbook.card_count = imported_cards
                 textbook.skipped_cards = skipped_cards
                 textbook.summary = (
-                    f"Processed {textbook.processed_chunks}/{textbook.total_chunks} chunks, "
-                    f"created {imported_cards} cards, skipped {skipped_cards}."
+                    f"已处理 {textbook.processed_chunks}/{textbook.total_chunks} 个文本块，"
+                    f"生成 {imported_cards} 张卡片，跳过 {skipped_cards} 条。"
                 )
                 self.db.commit()
 
@@ -130,17 +130,17 @@ class TextbookImporter:
             textbook.skipped_cards = skipped_cards
             if textbook.failed_chunks:
                 textbook.status = TextbookStatus.failed
-                textbook.error_message = f"{textbook.failed_chunks} chunks failed during extraction."
+                textbook.error_message = f"{textbook.failed_chunks} 个文本块抽取失败。"
                 textbook.summary = (
-                    f"Completed with partial failures: {imported_cards} cards created, "
-                    f"{skipped_cards} skipped, {textbook.failed_chunks} chunks failed."
+                    f"导入完成，但有部分失败：生成 {imported_cards} 张卡片，"
+                    f"跳过 {skipped_cards} 条，失败 {textbook.failed_chunks} 个文本块。"
                 )
             else:
                 textbook.status = TextbookStatus.completed
                 textbook.error_message = None
                 textbook.summary = (
-                    f"Imported {textbook.total_chunks} chunks and created {imported_cards} cards "
-                    f"with {skipped_cards} skipped."
+                    f"导入完成：共处理 {textbook.total_chunks} 个文本块，"
+                    f"生成 {imported_cards} 张卡片，跳过 {skipped_cards} 条。"
                 )
             self.db.commit()
             self.db.refresh(textbook)
@@ -149,30 +149,35 @@ class TextbookImporter:
             textbook.status = TextbookStatus.failed
             textbook.processed_at = utc_now()
             textbook.error_message = str(exc)
-            textbook.summary = "Import failed during text extraction."
+            textbook.summary = "文本提取阶段失败。"
             self.db.commit()
             raise ImportErrorWithMessage(str(exc)) from exc
         except Exception as exc:
             textbook.status = TextbookStatus.failed
             textbook.processed_at = utc_now()
             textbook.error_message = str(exc)
-            textbook.summary = "Import failed before chunk processing completed."
+            textbook.summary = "导入在文本块处理完成前失败。"
             self.db.commit()
             raise
 
     async def retry_failure(self, failure_id: int) -> RetryResult:
         failure = self.db.get(ImportChunkFailure, failure_id)
         if failure is None:
-            raise ImportErrorWithMessage("Import failure record was not found.")
+            raise ImportErrorWithMessage("未找到失败文本块记录。")
         if failure.resolved:
-            raise ImportErrorWithMessage("This import failure has already been resolved.")
+            raise ImportErrorWithMessage("该失败文本块已经处理完成。")
 
         textbook = self.db.get(Textbook, failure.textbook_id)
         if textbook is None:
-            raise ImportErrorWithMessage("Textbook import record was not found.")
+            raise ImportErrorWithMessage("未找到教材导入记录。")
 
         try:
-            imported_cards, skipped_cards = await self._process_chunk(textbook, failure.chunk_index, failure.chunk_excerpt, failure)
+            imported_cards, skipped_cards = await self._process_chunk(
+                textbook,
+                failure.chunk_index,
+                failure.chunk_text or failure.chunk_excerpt,
+                failure,
+            )
         except ImportErrorWithMessage as exc:
             self.db.refresh(failure)
             failure.retry_count += 1
@@ -184,7 +189,7 @@ class TextbookImporter:
         self.db.refresh(failure)
         failure.retry_count += 1
         failure.resolved = True
-        failure.error_message = "Resolved by manual retry."
+        failure.error_message = "已通过手动重试恢复。"
         failure.updated_at = utc_now()
         self.db.flush()
 
@@ -203,15 +208,15 @@ class TextbookImporter:
             textbook.status = TextbookStatus.completed
             textbook.error_message = None
             textbook.summary = (
-                f"All failed chunks resolved. {textbook.card_count} cards created, "
-                f"{textbook.skipped_cards} skipped."
+                f"所有失败文本块已恢复，当前共生成 {textbook.card_count} 张卡片，"
+                f"跳过 {textbook.skipped_cards} 条。"
             )
         else:
             textbook.status = TextbookStatus.failed
-            textbook.error_message = f"{textbook.failed_chunks} chunks still need retry."
+            textbook.error_message = f"仍有 {textbook.failed_chunks} 个文本块需要重试。"
             textbook.summary = (
-                f"Retried one failed chunk. {textbook.failed_chunks} failed chunks remain, "
-                f"{textbook.card_count} cards created."
+                f"已重试 1 个失败文本块，仍剩 {textbook.failed_chunks} 个待处理，"
+                f"当前共生成 {textbook.card_count} 张卡片。"
             )
 
         self.db.add(
@@ -225,12 +230,17 @@ class TextbookImporter:
         self.db.commit()
         self.db.refresh(textbook)
         self.db.refresh(failure)
-        return RetryResult(textbook=textbook, failure=failure, imported_cards=imported_cards, skipped_cards=skipped_cards)
+        return RetryResult(
+            textbook=textbook,
+            failure=failure,
+            imported_cards=imported_cards,
+            skipped_cards=skipped_cards,
+        )
 
     async def retry_all_failures(self, textbook_id: int) -> RetryBatchResult:
         textbook = self.db.get(Textbook, textbook_id)
         if textbook is None:
-            raise ImportErrorWithMessage("Textbook import record was not found.")
+            raise ImportErrorWithMessage("未找到教材导入记录。")
 
         failures = self.list_failures(textbook_id)
         retried_count = 0
@@ -276,6 +286,7 @@ class TextbookImporter:
                     ImportChunkFailure(
                         textbook_id=textbook.id,
                         chunk_index=chunk_index,
+                        chunk_text=chunk,
                         chunk_excerpt=chunk[:1000],
                         error_message=str(exc),
                     )

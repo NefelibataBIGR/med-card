@@ -8,7 +8,7 @@ Local web app for importing a medical textbook PDF, extracting revision cards, a
 - Frontend: React + Vite
 - Database: SQLite
 - PDF extraction: pypdf
-- LLM: DeepSeek-compatible OpenAI-style API, plus a local `mock` provider for smoke tests
+- LLM: 兼容 DeepSeek 的 OpenAI 风格 API，并提供本地 `mock` 提供者用于烟测
 
 ## Local Run
 
@@ -26,7 +26,7 @@ python -m venv .venv
 
 3. Copy `.env.example` to `.env` and set `MED_CARD_LLM_API_KEY`.
 
-For local testing without a remote model, set:
+本地不接远程模型时，可设置：
 
 ```dotenv
 MED_CARD_LLM_PROVIDER=mock
@@ -60,6 +60,7 @@ npm run dev
 - `GET /api/textbooks`
 - `GET /api/textbooks/{textbook_id}/failures`
 - `POST /api/textbooks/{textbook_id}/failures/{failure_id}/retry`
+- `POST /api/textbooks/{textbook_id}/failures/retry-all`
 - `GET /api/cards/draw`
 - `POST /api/sessions/{session_id}/reset`
 - `PATCH /api/cards/{id}`
@@ -88,6 +89,6 @@ npm run build
 
 ## Notes
 
-- Importing now runs in the background and updates textbook progress in SQLite.
-- Failed extraction chunks are stored and can be retried from the import page.
-- The first version still assumes a PDF with a text layer. OCR is not implemented yet.
+- 导入现在在后台执行，并会把进度写入 SQLite。
+- 抽取失败的文本块会被落库，可在导入页手动重试。
+- 当前版本仍假设 PDF 存在文本层；OCR 只预留了接口，尚未实现。

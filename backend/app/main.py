@@ -23,14 +23,14 @@ def mark_interrupted_imports() -> None:
         for item in items:
             item.status = TextbookStatus.failed
             item.processed_at = utc_now()
-            item.error_message = "Import was interrupted before completion. Re-import the PDF if needed."
+            item.error_message = "导入在完成前被中断；如有需要，请重新导入该 PDF。"
             if item.total_chunks:
                 item.summary = (
-                    f"Import interrupted after {item.processed_chunks}/{item.total_chunks} chunks. "
-                    f"{item.card_count} cards were created before shutdown."
+                    f"导入在处理完 {item.processed_chunks}/{item.total_chunks} 个文本块后中断。"
+                    f"关闭前已生成 {item.card_count} 张卡片。"
                 )
             else:
-                item.summary = "Import was interrupted before chunk processing began."
+                item.summary = "导入在文本块处理开始前被中断。"
         if items:
             db.commit()
     finally:

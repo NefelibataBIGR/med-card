@@ -13,7 +13,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
     const payload = await response.json().catch(() => null)
-    const detail = payload?.detail ?? 'Request failed'
+    const detail = payload?.detail ?? '请求失败。'
     throw new Error(detail)
   }
   if (response.status === 204) {

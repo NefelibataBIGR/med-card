@@ -25,12 +25,26 @@ const emptyCardForm = {
   source_excerpt: '',
 }
 
+const textbookStatusLabels: Record<Textbook['status'], string> = {
+  pending: '排队中',
+  processing: '处理中',
+  completed: '已完成',
+  failed: '失败',
+}
+
+const cardStatusLabels: Record<Card['status'], string> = {
+  new: '新卡',
+  familiar: '熟悉',
+  uncertain: '模糊',
+  ignored: '忽略',
+}
+
 export function App() {
   const [tab, setTab] = useState<TabKey>('import')
   const [textbooks, setTextbooks] = useState<Textbook[]>([])
   const [currentCard, setCurrentCard] = useState<Card | null>(null)
   const [sessionId, setSessionId] = useState('')
-  const [drawMessage, setDrawMessage] = useState('Draw a card to start this review round.')
+  const [drawMessage, setDrawMessage] = useState('点击“抽取下一张”，开始本轮复习。')
   const [roundComplete, setRoundComplete] = useState(false)
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -87,7 +101,7 @@ export function App() {
       return
     }
     void refreshImportFailures(selectedTextbookId)
-  }, [selectedTextbookId])
+  }, [selectedTextbookId, textbooks])
 
   async function refreshTextbooks() {
     try {
@@ -261,7 +275,7 @@ export function App() {
     <div className="shell">
       <header className="hero">
         <div>
-          <p className="eyebrow">Medical Revision Cards</p>
+          <p className="eyebrow">MED CARD</p>
           <h1>医学教材抽卡复习</h1>
           <p className="lede">
             导入教材 PDF，抽取复习卡片，并按“模糊优先、单轮不重复”的规则推进复习。
@@ -300,7 +314,7 @@ export function App() {
                 </button>
               </form>
               <p className="hint">
-                在 `.env` 中配置 `MED_CARD_LLM_API_KEY`。本地烟测时可切换到 `mock` provider。
+                在 `.env` 中配置 `MED_CARD_LLM_API_KEY`。本地烟测时可切换到 `mock` 提供者。
               </p>
             </section>
             <section className="panel">
@@ -312,6 +326,7 @@ export function App() {
                     <div>
                       <strong>{item.filename}</strong>
                       <p>{item.summary ?? '正在处理中，暂时还没有摘要。'}</p>
+                      {item.processed_at ? <p className="hint">完成时间：{new Date(item.processed_at).toLocaleString()}</p> : null}
                       <p className="hint">
                         进度 {item.processed_chunks}/{item.total_chunks || 0} 个文本块，失败 {item.failed_chunks} 个，
                         跳过 {item.skipped_cards} 个
@@ -319,10 +334,14 @@ export function App() {
                       {item.error_message ? <p className="hint">{item.error_message}</p> : null}
                     </div>
                     <div className="meta">
-                      <span>{item.status}</span>
+                      <span>{textbookStatusLabels[item.status]}</span>
                       <span>{item.card_count} 张卡片</span>
-                      <button className="ghost" onClick={() => setSelectedTextbookId(item.id)} type="button">
-                        {selectedTextbookId === item.id ? '正在查看失败块' : '查看失败块'}
+                      <button
+                        className="ghost"
+                        onClick={() => setSelectedTextbookId((current) => (current === item.id ? null : item.id))}
+                        type="button"
+                      >
+                        {selectedTextbookId === item.id ? '收起失败块' : '查看失败块'}
                       </button>
                     </div>
                   </article>
@@ -379,7 +398,7 @@ export function App() {
 
               {currentCard ? (
                 <article className="cardView">
-                  <span className={`statusBadge status-${currentCard.status}`}>{currentCard.status}</span>
+                  <span className={`statusBadge status-${currentCard.status}`}>{cardStatusLabels[currentCard.status]}</span>
                   <h2>{currentCard.concept_name}</h2>
                   <p className="chapter">{currentCard.chapter}</p>
                   <p>{currentCard.summary}</p>
@@ -476,7 +495,7 @@ export function App() {
           <div className="modalCard">
             <div className="modalHeader">
               <div>
-                <p className="eyebrow">Card Details</p>
+                <p className="eyebrow">卡片详情</p>
                 <h2>{currentCard.concept_name}</h2>
               </div>
               <button className="ghost" onClick={() => setIsEditorOpen(false)} type="button">

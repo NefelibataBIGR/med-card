@@ -116,6 +116,7 @@ class ImportChunkFailure(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     textbook_id: Mapped[int] = mapped_column(ForeignKey("textbooks.id"), nullable=False, index=True)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_excerpt: Mapped[str] = mapped_column(Text, nullable=False)
     error_message: Mapped[str] = mapped_column(Text, nullable=False)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

@@ -37,7 +37,7 @@ async def _run_import(textbook_id: int) -> None:
 def get_card_or_404(db: Session, card_id: int) -> Card:
     card = db.get(Card, card_id)
     if not card or card.is_deleted:
-        raise HTTPException(status_code=404, detail="Card not found.")
+        raise HTTPException(status_code=404, detail="未找到卡片。")
     return card
 
 
@@ -55,12 +55,12 @@ async def import_textbook(
     except ImportErrorWithMessage as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to import textbook: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"教材导入失败：{exc}") from exc
 
     background_tasks.add_task(_run_import, textbook.id)
     return TextbookEnqueueResponse(
         textbook=textbook,
-        message="Import queued. Poll /api/textbooks for progress.",
+        message="教材已加入导入队列，可在导入页查看处理进度。",
     )
 
 
@@ -73,7 +73,7 @@ def list_textbooks(db: Session = Depends(get_db)) -> list[Textbook]:
 def list_textbook_failures(textbook_id: int, db: Session = Depends(get_db)) -> list[ImportChunkFailureRead]:
     textbook = db.get(Textbook, textbook_id)
     if textbook is None:
-        raise HTTPException(status_code=404, detail="Textbook not found.")
+        raise HTTPException(status_code=404, detail="未找到教材记录。")
     return TextbookImporter(db).list_failures(textbook_id)
 
 
@@ -85,13 +85,13 @@ async def retry_textbook_failure(
 ) -> ImportChunkRetryResponse:
     textbook = db.get(Textbook, textbook_id)
     if textbook is None:
-        raise HTTPException(status_code=404, detail="Textbook not found.")
+        raise HTTPException(status_code=404, detail="未找到教材记录。")
     try:
         result = await TextbookImporter(db).retry_failure(failure_id)
     except ImportErrorWithMessage as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if result.textbook.id != textbook_id:
-        raise HTTPException(status_code=400, detail="Failure record does not belong to this textbook.")
+        raise HTTPException(status_code=400, detail="失败记录与教材不匹配。")
     return ImportChunkRetryResponse(
         textbook=result.textbook,
         failure=result.failure,
@@ -107,7 +107,7 @@ async def retry_all_textbook_failures(
 ) -> ImportChunkRetryBatchResponse:
     textbook = db.get(Textbook, textbook_id)
     if textbook is None:
-        raise HTTPException(status_code=404, detail="Textbook not found.")
+        raise HTTPException(status_code=404, detail="未找到教材记录。")
     try:
         result = await TextbookImporter(db).retry_all_failures(textbook_id)
     except ImportErrorWithMessage as exc:

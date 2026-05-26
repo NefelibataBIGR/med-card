@@ -20,7 +20,7 @@ class LLMClient:
         provider = self.settings.llm_provider.strip().lower()
         if provider != "mock" and not self.settings.llm_api_key:
             raise MissingLLMConfigurationError(
-                "MED_CARD_LLM_API_KEY is missing. Set it in .env before importing PDFs."
+                "缺少 MED_CARD_LLM_API_KEY，请先在 .env 中完成配置后再导入 PDF。"
             )
 
     async def extract_cards(self, chunk: str) -> list[dict[str, str]]:

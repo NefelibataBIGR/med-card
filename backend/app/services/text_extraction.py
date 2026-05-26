@@ -19,7 +19,7 @@ class OCRFallbackNotImplementedError(TextExtractionError):
 class OCRPlaceholderExtractor:
     def extract_chunks(self, _pdf_path: Path) -> list[str]:
         raise OCRFallbackNotImplementedError(
-            "No text layer was found in the PDF. OCR fallback is reserved but not implemented in this version."
+            "PDF 中未找到可提取的文本层；当前版本仅预留 OCR 扩展接口，尚未实现。"
         )
 
 

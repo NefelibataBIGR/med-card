@@ -287,3 +287,57 @@ def test_retry_all_failures_resolves_multiple_chunks(monkeypatch) -> None:
     refreshed_textbook = db.get(Textbook, textbook.id)
     assert refreshed_textbook is not None
     assert refreshed_textbook.status == TextbookStatus.completed
+
+
+def test_retry_failure_uses_full_chunk_text_not_truncated_excerpt(monkeypatch) -> None:
+    db = build_session()
+    importer = TextbookImporter(db)
+
+    textbook = Textbook(
+        filename="retry-full-chunk.pdf",
+        stored_path="retry-full-chunk.pdf",
+        status=TextbookStatus.pending,
+        summary="queued",
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    full_chunk = "A" * 1200 + " FULL-ONLY-CONTENT"
+    excerpt = full_chunk[:1000]
+
+    db.add(
+        ImportChunkFailure(
+            textbook_id=textbook.id,
+            chunk_index=1,
+            chunk_text=full_chunk,
+            chunk_excerpt=excerpt,
+            error_message="temporary failure",
+        )
+    )
+    textbook.status = TextbookStatus.failed
+    textbook.failed_chunks = 1
+    db.commit()
+
+    async def extract_cards(chunk: str) -> list[dict[str, str]]:
+        assert chunk == full_chunk
+        return [
+            {
+                "concept_name": "Recovered concept",
+                "summary": "Recovered summary for the full failed chunk.",
+                "chapter": "Recovered",
+                "source_excerpt": "Recovered from the stored full chunk.",
+            }
+        ]
+
+    monkeypatch.setattr(importer.llm, "extract_cards", extract_cards)
+
+    import anyio
+
+    failure = db.scalars(select(ImportChunkFailure)).one()
+    result = anyio.run(importer.retry_failure, failure.id)
+
+    assert result.imported_cards == 1
+    refreshed_failure = db.get(ImportChunkFailure, failure.id)
+    assert refreshed_failure is not None
+    assert refreshed_failure.resolved is True
