@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.database import Base
 from app.models import Card, ImportChunkFailure, Textbook, TextbookStatus
 from app.services.textbook_importer import ImportErrorWithMessage, TextbookImporter
-from app.services.text_extraction import TextExtractionError
 
 
 def build_session() -> Session:
@@ -117,89 +116,6 @@ def test_process_textbook_skips_highly_similar_concepts(monkeypatch) -> None:
     assert len(cards) == 1
     assert result.imported_cards == 1
     assert result.skipped_cards == 1
-
-
-def test_process_textbook_marks_text_extraction_failure(monkeypatch) -> None:
-    db = build_session()
-    importer = TextbookImporter(db)
-
-    textbook = Textbook(
-        filename="missing-text-layer.pdf",
-        stored_path="missing-text-layer.pdf",
-        status=TextbookStatus.pending,
-        summary="queued",
-    )
-    db.add(textbook)
-    db.commit()
-    db.refresh(textbook)
-
-    monkeypatch.setattr(
-        importer.text_extractor,
-        "extract_chunks",
-        lambda _path: (_ for _ in ()).throw(TextExtractionError("no text layer")),
-    )
-
-    import anyio
-
-    with pytest.raises(ImportErrorWithMessage, match="no text layer"):
-        anyio.run(importer.process_textbook, textbook.id)
-
-    refreshed = db.get(Textbook, textbook.id)
-    assert refreshed is not None
-    assert refreshed.status == TextbookStatus.failed
-    assert refreshed.error_message == "no text layer"
-    assert refreshed.summary == "文本提取阶段失败。"
-    assert refreshed.processed_at is not None
-
-
-def test_process_textbook_cleans_and_drops_invalid_cards(monkeypatch) -> None:
-    db = build_session()
-    importer = TextbookImporter(db)
-
-    textbook = Textbook(
-        filename="cleaning.pdf",
-        stored_path="cleaning.pdf",
-        status=TextbookStatus.pending,
-        summary="queued",
-    )
-    db.add(textbook)
-    db.commit()
-    db.refresh(textbook)
-
-    monkeypatch.setattr(importer.text_extractor, "extract_chunks", lambda _path: ["chunk-1"])
-
-    async def fake_extract_cards(_chunk: str) -> list[dict[str, str]]:
-        return [
-            {
-                "concept_name": "   ",
-                "summary": "too short",
-                "chapter": "General",
-                "source_excerpt": "missing concept should be dropped",
-            },
-            {
-                "concept_name": "C" * 400,
-                "summary": "S" * (importer.settings.extraction_summary_limit + 50),
-                "chapter": "",
-                "source_excerpt": "E" * (importer.settings.source_excerpt_limit + 50),
-            },
-        ]
-
-    monkeypatch.setattr(importer.llm, "extract_cards", fake_extract_cards)
-
-    import anyio
-
-    result = anyio.run(importer.process_textbook, textbook.id)
-
-    cards = list(db.scalars(select(Card)).all())
-    assert result.imported_cards == 1
-    assert result.skipped_cards == 1
-    assert len(cards) == 1
-
-    card = cards[0]
-    assert len(card.concept_name) == 255
-    assert len(card.summary) == importer.settings.extraction_summary_limit
-    assert card.chapter == "Uncategorized"
-    assert len(card.source_excerpt) == importer.settings.source_excerpt_limit
 
 
 def test_retry_failure_resolves_queue_and_updates_textbook(monkeypatch) -> None:

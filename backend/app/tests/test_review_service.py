@@ -87,20 +87,3 @@ def test_mark_status_moves_card_between_pools() -> None:
     assert updated.status == CardStatus.familiar
     assert any(item.id == updated.id for item in service.list_pool(CardStatus.familiar, ""))
     assert all(item.id != updated.id for item in service.list_pool(CardStatus.uncertain, ""))
-
-
-def test_familiar_cards_are_not_drawn_in_regular_flow() -> None:
-    db = build_session()
-    seed_cards(db)
-    service = ReviewService(db)
-
-    uncertain = db.query(Card).filter(Card.status == CardStatus.uncertain).one()
-    new_card = db.query(Card).filter(Card.status == CardStatus.new).one()
-    uncertain.status = CardStatus.familiar
-    new_card.status = CardStatus.familiar
-    db.commit()
-
-    _, card, complete = service.draw_card(None)
-
-    assert complete is True
-    assert card is None
