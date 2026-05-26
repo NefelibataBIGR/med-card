@@ -93,6 +93,87 @@ def test_draw_mark_and_pool_flow() -> None:
     assert pool_payload["items"][0]["id"] == card_id
 
 
+def test_update_card_persists_changes() -> None:
+    db = build_session()
+    seed_cards(db)
+    client = build_client(db)
+
+    draw_response = client.get("/api/cards/draw")
+    payload = draw_response.json()
+    session_id = payload["session_id"]
+    card_id = payload["card"]["id"]
+
+    response = client.patch(
+        f"/api/cards/{card_id}",
+        headers={"X-Session-Id": session_id},
+        json={
+            "concept_name": "Updated concept",
+            "summary": "Updated summary for persistence verification.",
+            "chapter": "Updated chapter",
+            "source_excerpt": "Updated source excerpt for persistence verification.",
+        },
+    )
+
+    assert response.status_code == 200
+    updated = response.json()
+    assert updated["concept_name"] == "Updated concept"
+    assert updated["chapter"] == "Updated chapter"
+
+    persisted = db.get(Card, card_id)
+    assert persisted is not None
+    assert persisted.concept_name == "Updated concept"
+    assert persisted.summary == "Updated summary for persistence verification."
+
+
+def test_pool_search_filters_by_query() -> None:
+    db = build_session()
+    seed_cards(db)
+    client = build_client(db)
+
+    uncertain_response = client.get("/api/pools/uncertain?q=Cardiology")
+    assert uncertain_response.status_code == 200
+    uncertain_payload = uncertain_response.json()
+    assert uncertain_payload["total"] == 1
+    assert uncertain_payload["items"][0]["concept_name"] == "Volume pressure loop"
+
+    draw_response = client.get("/api/cards/draw")
+    session_id = draw_response.json()["session_id"]
+    uncertain_card_id = draw_response.json()["card"]["id"]
+
+    mark_response = client.post(
+        f"/api/cards/{uncertain_card_id}/mark-familiar",
+        headers={"X-Session-Id": session_id},
+    )
+    assert mark_response.status_code == 200
+
+    response = client.get("/api/pools/familiar?q=ventricular")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["concept_name"] == "Volume pressure loop"
+
+
+def test_reset_session_allows_drawing_again() -> None:
+    db = build_session()
+    seed_cards(db)
+    client = build_client(db)
+
+    first_draw = client.get("/api/cards/draw").json()
+    session_id = first_draw["session_id"]
+    first_card_id = first_draw["card"]["id"]
+
+    second_draw = client.get("/api/cards/draw", headers={"X-Session-Id": session_id}).json()
+    assert second_draw["card"]["id"] != first_card_id
+
+    reset_response = client.post(f"/api/sessions/{session_id}/reset")
+    assert reset_response.status_code == 204
+
+    third_draw = client.get("/api/cards/draw", headers={"X-Session-Id": session_id})
+    assert third_draw.status_code == 200
+    assert third_draw.json()["card"]["id"] == first_card_id
+
+
 def test_delete_card_excludes_it_from_draws() -> None:
     db = build_session()
     seed_cards(db)
@@ -111,6 +192,33 @@ def test_delete_card_excludes_it_from_draws() -> None:
     second_draw = client.get("/api/cards/draw", headers={"X-Session-Id": session_id})
     assert second_draw.status_code == 200
     assert second_draw.json()["card"]["id"] != first_card_id
+
+
+def test_delete_card_excludes_it_from_pool_views() -> None:
+    db = build_session()
+    seed_cards(db)
+    client = build_client(db)
+
+    first_draw = client.get("/api/cards/draw").json()
+    session_id = first_draw["session_id"]
+    first_card_id = first_draw["card"]["id"]
+
+    mark_response = client.post(
+        f"/api/cards/{first_card_id}/mark-familiar",
+        headers={"X-Session-Id": session_id},
+    )
+    assert mark_response.status_code == 200
+
+    delete_response = client.delete(
+        f"/api/cards/{first_card_id}",
+        headers={"X-Session-Id": session_id},
+    )
+    assert delete_response.status_code == 204
+
+    pool_response = client.get("/api/pools/familiar")
+    assert pool_response.status_code == 200
+    payload = pool_response.json()
+    assert payload["total"] == 0
 
 
 def test_import_endpoint_validates_missing_configuration() -> None:
