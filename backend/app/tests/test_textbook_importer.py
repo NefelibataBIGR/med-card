@@ -19,7 +19,7 @@ def build_session() -> Session:
     return sessionmaker(bind=engine, expire_on_commit=False)()
 
 
-def test_process_textbook_dedupes_and_keeps_partial_success_on_chunk_failure(monkeypatch) -> None:
+def test_process_textbook_merges_duplicate_cards_and_keeps_partial_success_on_chunk_failure(monkeypatch) -> None:
     db = build_session()
     importer = TextbookImporter(db)
 
@@ -53,7 +53,7 @@ def test_process_textbook_dedupes_and_keeps_partial_success_on_chunk_failure(mon
                 },
                 {
                     "concept_name": "Renal clearance",
-                    "summary": "Duplicate concept in the same chapter should be skipped.",
+                    "summary": "Duplicate concept in the same chapter should be merged.",
                     "chapter": "Nephrology",
                     "source_excerpt": "Duplicate entry",
                 },
@@ -69,14 +69,16 @@ def test_process_textbook_dedupes_and_keeps_partial_success_on_chunk_failure(mon
     cards = list(db.scalars(select(Card)).all())
     assert len(cards) == 1
     assert result.imported_cards == 1
-    assert result.skipped_cards == 1
+    assert result.skipped_cards == 0
     assert cards[0].page_number == 12
+    assert "Duplicate concept in the same chapter should be merged." in cards[0].summary
+    assert "Duplicate entry" in cards[0].source_excerpt
 
     textbook = db.get(Textbook, textbook.id)
     assert textbook is not None
     assert textbook.status == TextbookStatus.failed
     assert textbook.card_count == 1
-    assert textbook.skipped_cards == 1
+    assert textbook.skipped_cards == 0
     assert textbook.total_chunks == 2
     assert textbook.processed_chunks == 2
     assert textbook.failed_chunks == 1
@@ -86,7 +88,7 @@ def test_process_textbook_dedupes_and_keeps_partial_success_on_chunk_failure(mon
     assert failures[0].error_message == "mock batch failure"
 
 
-def test_process_textbook_skips_highly_similar_concepts(monkeypatch) -> None:
+def test_process_textbook_merges_highly_similar_concepts(monkeypatch) -> None:
     db = build_session()
     importer = TextbookImporter(db)
 
@@ -131,8 +133,72 @@ def test_process_textbook_skips_highly_similar_concepts(monkeypatch) -> None:
     cards = list(db.scalars(select(Card)).all())
     assert len(cards) == 1
     assert result.imported_cards == 1
-    assert result.skipped_cards == 1
+    assert result.skipped_cards == 0
     assert cards[0].page_number == 21
+    assert "Same concept with punctuation variance." in cards[0].summary
+    assert "Definition two." in cards[0].source_excerpt
+
+
+def test_process_textbook_merges_duplicate_names_across_chapters(monkeypatch) -> None:
+    db = build_session()
+    importer = TextbookImporter(db)
+
+    textbook = Textbook(
+        filename="merge-cross-chapter.pdf",
+        stored_path="merge-cross-chapter.pdf",
+        status=TextbookStatus.pending,
+        summary="queued",
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    monkeypatch.setattr(
+        importer.text_extractor,
+        "extract_chunks",
+        lambda _path: [
+            ParagraphChunk(index=1, page_number=31, section_path="Circulation", text="chunk-1"),
+            ParagraphChunk(index=2, page_number=42, section_path="Emergency", text="chunk-2"),
+        ],
+    )
+
+    async def fake_extract_cards(chunk: ParagraphChunk) -> list[dict[str, str]]:
+        if chunk.text == "chunk-1":
+            return [
+                {
+                    "concept_name": "Shock",
+                    "summary": "A state of inadequate tissue perfusion.",
+                    "chapter": "Circulation",
+                    "page_number": "31",
+                    "source_excerpt": "Shock reduces effective tissue perfusion.",
+                }
+            ]
+        return [
+            {
+                "concept_name": "Shock",
+                "summary": "Clinical management focuses on reversing the underlying cause.",
+                "chapter": "Emergency",
+                "page_number": "42",
+                "source_excerpt": "Shock treatment targets the cause and supports perfusion.",
+            }
+        ]
+
+    monkeypatch.setattr(importer.llm, "extract_cards", fake_extract_cards)
+
+    import anyio
+
+    result = anyio.run(importer.process_textbook, textbook.id)
+
+    cards = list(db.scalars(select(Card)).all())
+
+    assert len(cards) == 1
+    assert result.imported_cards == 1
+    assert result.skipped_cards == 0
+    assert cards[0].concept_name == "Shock"
+    assert cards[0].page_number == 31
+    assert cards[0].chapter == "Circulation | Emergency"
+    assert "Clinical management focuses on reversing the underlying cause." in cards[0].summary
+    assert "supports perfusion" in cards[0].source_excerpt
 
 
 def test_process_textbook_skips_heading_like_chunks(monkeypatch) -> None:

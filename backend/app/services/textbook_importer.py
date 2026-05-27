@@ -307,28 +307,28 @@ class TextbookImporter:
         skipped = 0
         if not raw_cards:
             return 0, 1
-        local_seen: dict[str, list[str]] = {}
-        existing_by_chapter: dict[str, list[str]] = {}
+        local_cards: list[Card] = []
+        existing_cards = self._load_existing_cards(textbook.id)
         for raw_card in raw_cards:
             cleaned = self._clean_card(raw_card, chunk)
             if not cleaned:
                 skipped += 1
                 continue
-            chapter_key = cleaned["chapter"].casefold()
-            local_candidates = local_seen.setdefault(chapter_key, [])
-            if any(self._is_similar_concept(cleaned["concept_name"], candidate) for candidate in local_candidates):
-                skipped += 1
+            local_target = self._find_similar_card(cleaned["concept_name"], local_cards)
+            if local_target is not None:
+                self._merge_into_card(local_target, cleaned)
                 continue
-            existing_candidates = existing_by_chapter.setdefault(
-                chapter_key,
-                self._load_existing_concepts(textbook.id, cleaned["chapter"]),
-            )
-            if any(self._is_similar_concept(cleaned["concept_name"], candidate) for candidate in existing_candidates):
-                skipped += 1
+
+            existing_target = self._find_similar_card(cleaned["concept_name"], existing_cards)
+            if existing_target is not None:
+                self._merge_into_card(existing_target, cleaned)
+                self.db.add(existing_target)
                 continue
-            local_candidates.append(cleaned["concept_name"])
-            existing_candidates.append(cleaned["concept_name"])
-            self.db.add(Card(textbook_id=textbook.id, status=CardStatus.new, **cleaned))
+
+            card = Card(textbook_id=textbook.id, status=CardStatus.new, **cleaned)
+            self.db.add(card)
+            local_cards.append(card)
+            existing_cards.append(card)
             imported += 1
         self.db.commit()
         return imported, skipped
@@ -433,13 +433,67 @@ class TextbookImporter:
             return False
         return bool(re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9()（）·、/\-\s]+", stripped))
 
-    def _load_existing_concepts(self, textbook_id: int, chapter: str) -> list[str]:
-        stmt = select(Card.concept_name).where(
+    def _load_existing_cards(self, textbook_id: int) -> list[Card]:
+        stmt = select(Card).where(
             Card.textbook_id == textbook_id,
-            Card.chapter == chapter,
             Card.is_deleted.is_(False),
         )
         return list(self.db.scalars(stmt).all())
+
+    def _find_similar_card(self, concept_name: str, cards: list[Card]) -> Card | None:
+        for card in cards:
+            if self._is_similar_concept(concept_name, card.concept_name):
+                return card
+        return None
+
+    def _merge_into_card(self, card: Card, cleaned: dict[str, str | int | None]) -> None:
+        if not card.english_name and cleaned["english_name"]:
+            card.english_name = str(cleaned["english_name"])
+
+        card.summary = self._merge_text_values(
+            card.summary,
+            str(cleaned["summary"]),
+            limit=max(500, self.settings.extraction_summary_limit),
+        )
+        card.source_excerpt = self._merge_text_values(
+            card.source_excerpt,
+            str(cleaned["source_excerpt"]),
+            limit=self.settings.source_excerpt_limit,
+        )
+        card.chapter = self._merge_label_values(card.chapter, str(cleaned["chapter"]), limit=255)
+
+        incoming_page = cleaned["page_number"]
+        if isinstance(incoming_page, int):
+            if card.page_number is None:
+                card.page_number = incoming_page
+            else:
+                card.page_number = min(card.page_number, incoming_page)
+
+    def _merge_text_values(self, current: str, incoming: str, limit: int) -> str:
+        normalized_current = " ".join(current.split())
+        normalized_incoming = " ".join(incoming.split())
+        if not normalized_incoming:
+            return normalized_current[:limit]
+        if not normalized_current:
+            return normalized_incoming[:limit]
+        if normalized_incoming in normalized_current:
+            return normalized_current[:limit]
+        if normalized_current in normalized_incoming:
+            return normalized_incoming[:limit]
+        return f"{normalized_current} {normalized_incoming}"[:limit]
+
+    def _merge_label_values(self, current: str, incoming: str, limit: int) -> str:
+        normalized_current = " ".join(current.split())
+        normalized_incoming = " ".join(incoming.split())
+        if not normalized_incoming:
+            return normalized_current[:limit]
+        if not normalized_current:
+            return normalized_incoming[:limit]
+
+        parts = [part.strip() for part in normalized_current.split(" | ") if part.strip()]
+        if normalized_incoming not in parts:
+            parts.append(normalized_incoming)
+        return " | ".join(parts)[:limit]
 
     def _is_similar_concept(self, left: str, right: str) -> bool:
         normalized_left = self._normalize_concept(left)
