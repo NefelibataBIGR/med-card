@@ -15,6 +15,7 @@ class TextbookRead(BaseModel):
     status: TextbookStatus
     summary: str | None
     error_message: str | None
+    cancel_requested: bool
     card_count: int
     skipped_cards: int
     total_chunks: int

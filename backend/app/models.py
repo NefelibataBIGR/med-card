@@ -18,6 +18,7 @@ class TextbookStatus(str, Enum):
     processing = "processing"
     completed = "completed"
     failed = "failed"
+    canceled = "canceled"
 
 
 class CardStatus(str, Enum):
@@ -51,6 +52,7 @@ class Textbook(Base):
     )
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     card_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     skipped_cards: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_chunks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

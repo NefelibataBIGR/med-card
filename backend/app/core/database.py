@@ -32,6 +32,7 @@ def ensure_schema() -> None:
     inspector = inspect(engine)
     textbook_columns = {column["name"] for column in inspector.get_columns("textbooks")}
     required_columns = {
+        "cancel_requested": "ALTER TABLE textbooks ADD COLUMN cancel_requested BOOLEAN NOT NULL DEFAULT 0",
         "skipped_cards": "ALTER TABLE textbooks ADD COLUMN skipped_cards INTEGER NOT NULL DEFAULT 0",
         "total_chunks": "ALTER TABLE textbooks ADD COLUMN total_chunks INTEGER NOT NULL DEFAULT 0",
         "processed_chunks": "ALTER TABLE textbooks ADD COLUMN processed_chunks INTEGER NOT NULL DEFAULT 0",

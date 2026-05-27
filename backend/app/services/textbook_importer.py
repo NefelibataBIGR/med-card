@@ -106,13 +106,29 @@ class TextbookImporter:
 
         imported_cards = 0
         skipped_cards = 0
+        if self._finalize_cancel_requested(textbook):
+            return ImportResult(textbook=textbook, imported_cards=0, skipped_cards=0)
         try:
             chunks = self.text_extractor.extract_chunks(Path(textbook.stored_path))
             textbook.total_chunks = len(chunks)
             textbook.summary = f"正在处理 {len(chunks)} 个段落。"
             self.db.commit()
+            if self._finalize_cancel_requested(textbook):
+                self.db.refresh(textbook)
+                return ImportResult(
+                    textbook=textbook,
+                    imported_cards=textbook.card_count,
+                    skipped_cards=textbook.skipped_cards,
+                )
 
             for chunk in chunks:
+                if self._finalize_cancel_requested(textbook):
+                    self.db.refresh(textbook)
+                    return ImportResult(
+                        textbook=textbook,
+                        imported_cards=textbook.card_count,
+                        skipped_cards=textbook.skipped_cards,
+                    )
                 imported, skipped = await self._process_chunk(textbook, chunk)
                 imported_cards += imported
                 skipped_cards += skipped
@@ -125,6 +141,13 @@ class TextbookImporter:
                     f"生成 {imported_cards} 张卡片，跳过 {skipped_cards} 条。"
                 )
                 self.db.commit()
+                if self._finalize_cancel_requested(textbook):
+                    self.db.refresh(textbook)
+                    return ImportResult(
+                        textbook=textbook,
+                        imported_cards=textbook.card_count,
+                        skipped_cards=textbook.skipped_cards,
+                    )
 
             textbook.processed_at = utc_now()
             textbook.card_count = imported_cards
@@ -364,6 +387,27 @@ class TextbookImporter:
             section_path=failure.section_path or "Uncategorized",
             text=failure.chunk_text or failure.chunk_excerpt,
         )
+
+    def _finalize_cancel_requested(self, textbook: Textbook) -> bool:
+        self.db.refresh(textbook)
+        if not textbook.cancel_requested:
+            return False
+
+        textbook.status = TextbookStatus.canceled
+        textbook.processed_at = utc_now()
+        textbook.error_message = None
+        if textbook.total_chunks:
+            summary = (
+                f"导入已取消：已处理 {textbook.processed_chunks}/{textbook.total_chunks} 个段落，"
+                f"生成 {textbook.card_count} 张卡片，跳过 {textbook.skipped_cards} 条。"
+            )
+            if textbook.failed_chunks:
+                summary = summary[:-1] + f"，失败 {textbook.failed_chunks} 个段落。"
+            textbook.summary = summary
+        else:
+            textbook.summary = "导入已取消，尚未开始处理段落。"
+        self.db.commit()
+        return True
 
     def _parse_page_number(self, value: object) -> int | None:
         if isinstance(value, int):

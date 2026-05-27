@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..models import Card, CardStatus, ReviewAction, ReviewLog, Textbook
+from ..models import Card, CardStatus, ReviewAction, ReviewLog, Textbook, TextbookStatus
 from ..schemas import (
     CardRead,
     CardUpdate,
@@ -75,6 +75,21 @@ def list_textbook_failures(textbook_id: int, db: Session = Depends(get_db)) -> l
     if textbook is None:
         raise HTTPException(status_code=404, detail="未找到教材记录。")
     return TextbookImporter(db).list_failures(textbook_id)
+
+
+@router.post("/textbooks/{textbook_id}/cancel", response_model=TextbookRead)
+def cancel_textbook_import(textbook_id: int, db: Session = Depends(get_db)) -> Textbook:
+    textbook = db.get(Textbook, textbook_id)
+    if textbook is None:
+        raise HTTPException(status_code=404, detail="未找到教材记录。")
+    if textbook.status not in {TextbookStatus.pending, TextbookStatus.processing}:
+        raise HTTPException(status_code=400, detail="当前导入已经结束，不能取消。")
+    if not textbook.cancel_requested:
+        textbook.cancel_requested = True
+        textbook.summary = "已收到取消请求，系统会在当前段落处理结束后停止导入。"
+        db.commit()
+        db.refresh(textbook)
+    return textbook
 
 
 @router.post("/textbooks/{textbook_id}/failures/{failure_id}/retry", response_model=ImportChunkRetryResponse)

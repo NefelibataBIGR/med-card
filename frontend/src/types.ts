@@ -1,4 +1,4 @@
-export type TextbookStatus = 'pending' | 'processing' | 'completed' | 'failed'
+export type TextbookStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'canceled'
 export type CardStatus = 'new' | 'familiar' | 'uncertain' | 'ignored'
 
 export interface Textbook {
@@ -9,6 +9,7 @@ export interface Textbook {
   status: TextbookStatus
   summary: string | null
   error_message: string | null
+  cancel_requested: boolean
   card_count: number
   skipped_cards: number
   total_chunks: number

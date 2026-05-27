@@ -297,6 +297,65 @@ def test_process_textbook_counts_empty_llm_result_as_skipped(monkeypatch) -> Non
     assert refreshed_textbook.skipped_cards == 1
 
 
+def test_process_textbook_stops_after_cancel_request(monkeypatch) -> None:
+    db = build_session()
+    importer = TextbookImporter(db)
+
+    textbook = Textbook(
+        filename="cancel-midway.pdf",
+        stored_path="sample.pdf",
+        status=TextbookStatus.pending,
+        summary="queued",
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    monkeypatch.setattr(
+        importer.text_extractor,
+        "extract_chunks",
+        lambda _path: [
+            ParagraphChunk(index=1, page_number=12, section_path="General", text="chunk-1"),
+            ParagraphChunk(index=2, page_number=13, section_path="General", text="chunk-2"),
+        ],
+    )
+
+    async def fake_extract_cards(chunk: ParagraphChunk) -> list[dict[str, str]]:
+        if chunk.text == "chunk-2":
+            raise AssertionError("取消后不应继续处理后续段落。")
+        current = db.get(Textbook, textbook.id)
+        assert current is not None
+        current.cancel_requested = True
+        db.commit()
+        return [
+            {
+                "concept_name": "Cancelable concept",
+                "summary": "A concept extracted before the import was canceled.",
+                "chapter": "General",
+                "source_excerpt": "chunk one excerpt",
+            }
+        ]
+
+    monkeypatch.setattr(importer.llm, "extract_cards", fake_extract_cards)
+
+    import anyio
+
+    result = anyio.run(importer.process_textbook, textbook.id)
+
+    cards = list(db.scalars(select(Card)).all())
+    refreshed_textbook = db.get(Textbook, textbook.id)
+
+    assert result.imported_cards == 1
+    assert result.skipped_cards == 0
+    assert len(cards) == 1
+    assert refreshed_textbook is not None
+    assert refreshed_textbook.status == TextbookStatus.canceled
+    assert refreshed_textbook.processed_chunks == 1
+    assert refreshed_textbook.total_chunks == 2
+    assert refreshed_textbook.cancel_requested is True
+    assert "导入已取消" in refreshed_textbook.summary
+
+
 def test_retry_failure_resolves_queue_and_updates_textbook(monkeypatch) -> None:
     db = build_session()
     importer = TextbookImporter(db)

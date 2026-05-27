@@ -249,6 +249,51 @@ textarea {
   flex-wrap: wrap;
 }
 
+.importMeta {
+  display: grid;
+  justify-items: end;
+  gap: 0.85rem;
+  flex-shrink: 0;
+}
+
+.metaActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.65rem;
+}
+
+.metaActionButton {
+  min-width: 8.5rem;
+  padding: 0.78rem 1rem;
+  border-radius: 1.05rem;
+  border: 1px solid rgba(191, 74, 39, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 238, 228, 0.96));
+  box-shadow: 0 12px 28px rgba(25, 33, 45, 0.08);
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.metaActionButton:hover:not(:disabled) {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(247, 240, 229, 1));
+  color: var(--accent-dark);
+}
+
+.metaActionButton-danger {
+  border-color: rgba(145, 49, 40, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 244, 242, 0.98), rgba(249, 230, 224, 0.98));
+  color: #8d3418;
+}
+
+.metaActionButton-danger:hover:not(:disabled) {
+  background:
+    linear-gradient(180deg, rgba(255, 248, 246, 1), rgba(252, 236, 231, 1));
+  color: #72251d;
+}
+
 .importProgress {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -470,5 +515,17 @@ textarea {
 
   .editGrid {
     grid-template-columns: 1fr;
+  }
+
+  .importMeta {
+    justify-items: stretch;
+  }
+
+  .metaActions {
+    justify-content: stretch;
+  }
+
+  .metaActionButton {
+    width: 100%;
   }
 }

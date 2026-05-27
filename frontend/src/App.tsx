@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 
 import {
+  cancelTextbookImport,
   deleteCard,
   drawCard,
   fetchPool,
@@ -41,6 +42,7 @@ const textbookStatusLabels: Record<Textbook['status'], string> = {
   processing: '处理中',
   completed: '已完成',
   failed: '失败',
+  canceled: '已取消',
 }
 
 const cardStatusLabels: Record<Card['status'], string> = {
@@ -69,10 +71,12 @@ export function App() {
   const [importFailures, setImportFailures] = useState<ImportChunkFailure[]>([])
   const [retryingFailureId, setRetryingFailureId] = useState<number | null>(null)
   const [retryingAllFailures, setRetryingAllFailures] = useState(false)
+  const [cancellingTextbookId, setCancellingTextbookId] = useState<number | null>(null)
   const latestDrawIndex = drawHistory.length - 1
   const activeCardIndex = historyCursor ?? latestDrawIndex
   const currentCard = activeCardIndex >= 0 ? drawHistory[activeCardIndex] ?? null : null
   const canViewPreviousCard = activeCardIndex > 0
+  const canViewNextCard = activeCardIndex >= 0 && activeCardIndex < latestDrawIndex
   const canReturnToLatestCard = historyCursor !== null && activeCardIndex !== latestDrawIndex
 
   useEffect(() => {
@@ -321,6 +325,20 @@ export function App() {
     }
   }
 
+  async function handleCancelImport(textbookId: number) {
+    setCancellingTextbookId(textbookId)
+    setError('')
+    try {
+      await cancelTextbookImport(textbookId)
+      await refreshTextbooks()
+      setDrawMessage('已提交取消请求，系统会在当前段落处理结束后停止导入。')
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setCancellingTextbookId(null)
+    }
+  }
+
   function handleShowPreviousCard() {
     if (!canViewPreviousCard) {
       return
@@ -335,12 +353,23 @@ export function App() {
     setHistoryCursor(null)
   }
 
+  function handleShowNextCard() {
+    if (!canViewNextCard) {
+      return
+    }
+    if (activeCardIndex + 1 >= latestDrawIndex) {
+      setHistoryCursor(null)
+      return
+    }
+    setHistoryCursor(activeCardIndex + 1)
+  }
+
   function getImportProgress(textbook: Textbook) {
     if (textbook.total_chunks <= 0) {
       const indeterminate = textbook.status === 'pending' || textbook.status === 'processing'
       return {
         indeterminate,
-        label: indeterminate ? '准备中' : '0%',
+        label: indeterminate ? '准备中' : textbook.status === 'canceled' ? '已取消' : '0%',
         percent: textbook.status === 'completed' ? 100 : 0,
       }
     }
@@ -440,16 +469,38 @@ export function App() {
                       </p>
                       {item.error_message ? <p className="hint">{item.error_message}</p> : null}
                     </div>
-                    <div className="meta">
-                      <span>{textbookStatusLabels[item.status]}</span>
-                      <span>{item.card_count} 张卡片</span>
-                      <button
-                        className="ghost"
-                        onClick={() => setSelectedTextbookId((current) => (current === item.id ? null : item.id))}
-                        type="button"
-                      >
-                        {selectedTextbookId === item.id ? '收起失败段落' : '查看失败段落'}
-                      </button>
+                    <div className="importMeta">
+                      <div className="meta">
+                        <span>{textbookStatusLabels[item.status]}</span>
+                        <span>{item.card_count} 张卡片</span>
+                      </div>
+                      <div className="metaActions">
+                        <button
+                          className="metaActionButton"
+                          onClick={() => setSelectedTextbookId((current) => (current === item.id ? null : item.id))}
+                          type="button"
+                        >
+                          {selectedTextbookId === item.id ? '收起失败段落' : '查看失败段落'}
+                        </button>
+                        <button
+                          className="metaActionButton metaActionButton-danger"
+                          disabled={
+                            cancellingTextbookId === item.id ||
+                            item.cancel_requested ||
+                            (item.status !== 'pending' && item.status !== 'processing')
+                          }
+                          onClick={() => void handleCancelImport(item.id)}
+                          type="button"
+                        >
+                          {item.status === 'canceled'
+                            ? '已取消'
+                            : item.cancel_requested
+                              ? '取消中…'
+                              : cancellingTextbookId === item.id
+                                ? '提交中…'
+                                : '取消导入'}
+                        </button>
+                      </div>
                     </div>
                   </article>
                 ))}
@@ -504,6 +555,9 @@ export function App() {
               <div className="cardToolbar">
                 <button className="ghost" disabled={!canViewPreviousCard || loading} onClick={handleShowPreviousCard} type="button">
                   上一张
+                </button>
+                <button className="ghost" disabled={!canViewNextCard || loading} onClick={handleShowNextCard} type="button">
+                  下一张
                 </button>
                 <button className="ghost" disabled={!canReturnToLatestCard || loading} onClick={handleReturnToLatestCard} type="button">
                   返回最新

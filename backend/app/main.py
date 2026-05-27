@@ -21,16 +21,27 @@ def mark_interrupted_imports() -> None:
             ).all()
         )
         for item in items:
-            item.status = TextbookStatus.failed
             item.processed_at = utc_now()
-            item.error_message = "导入在完成前被中断；如有需要，请重新导入该 PDF。"
-            if item.total_chunks:
-                item.summary = (
-                    f"导入在处理完 {item.processed_chunks}/{item.total_chunks} 个文本块后中断。"
-                    f"关闭前已生成 {item.card_count} 张卡片。"
-                )
+            if item.cancel_requested:
+                item.status = TextbookStatus.canceled
+                item.error_message = None
+                if item.total_chunks:
+                    item.summary = (
+                        f"导入已取消：已处理 {item.processed_chunks}/{item.total_chunks} 个段落，"
+                        f"生成 {item.card_count} 张卡片，跳过 {item.skipped_cards} 条。"
+                    )
+                else:
+                    item.summary = "导入已取消，尚未开始处理段落。"
             else:
-                item.summary = "导入在文本块处理开始前被中断。"
+                item.status = TextbookStatus.failed
+                item.error_message = "导入在完成前被中断；如有需要，请重新导入该 PDF。"
+                if item.total_chunks:
+                    item.summary = (
+                        f"导入在处理完 {item.processed_chunks}/{item.total_chunks} 个文本块后中断。"
+                        f"关闭前已生成 {item.card_count} 张卡片。"
+                    )
+                else:
+                    item.summary = "导入在文本块处理开始前被中断。"
         if items:
             db.commit()
     finally:

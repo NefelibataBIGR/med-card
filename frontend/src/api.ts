@@ -89,6 +89,12 @@ export async function listImportFailures(textbookId: number): Promise<ImportChun
   return request<ImportChunkFailure[]>(`/api/textbooks/${textbookId}/failures`)
 }
 
+export async function cancelTextbookImport(textbookId: number): Promise<Textbook> {
+  return request<Textbook>(`/api/textbooks/${textbookId}/cancel`, {
+    method: 'POST',
+  })
+}
+
 export async function retryImportFailure(textbookId: number, failureId: number): Promise<ImportChunkRetryResponse> {
   return request<ImportChunkRetryResponse>(`/api/textbooks/${textbookId}/failures/${failureId}/retry`, {
     method: 'POST',

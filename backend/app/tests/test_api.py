@@ -212,6 +212,46 @@ def test_list_textbook_failures_returns_records() -> None:
     assert payload[0]["chunk_index"] == 2
 
 
+def test_cancel_textbook_import_marks_active_record() -> None:
+    db = build_session()
+    textbook = Textbook(
+        filename="sample.pdf",
+        stored_path="sample.pdf",
+        status=TextbookStatus.processing,
+        summary="processing",
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    client = build_client(db)
+    response = client.post(f"/api/textbooks/{textbook.id}/cancel")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cancel_requested"] is True
+    assert "取消请求" in payload["summary"]
+
+
+def test_cancel_textbook_import_rejects_finished_record() -> None:
+    db = build_session()
+    textbook = Textbook(
+        filename="done.pdf",
+        stored_path="done.pdf",
+        status=TextbookStatus.completed,
+        summary="done",
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    client = build_client(db)
+    response = client.post(f"/api/textbooks/{textbook.id}/cancel")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "当前导入已经结束，不能取消。"
+
+
 def test_retry_all_textbook_failures_for_missing_textbook_returns_404() -> None:
     db = build_session()
     client = build_client(db)
