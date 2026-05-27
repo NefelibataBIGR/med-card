@@ -124,6 +124,26 @@ async def retry_all_textbook_failures(
 def draw_card(db: Session = Depends(get_db), x_session_id: str | None = Header(default=None)) -> DrawResponse:
     session_id, card, round_complete = ReviewService(db).draw_card(x_session_id)
     if round_complete:
+        has_any_cards = db.scalar(select(Card.id).where(Card.is_deleted.is_(False)).limit(1))
+        has_drawable_cards = db.scalar(
+            select(Card.id)
+            .where(Card.is_deleted.is_(False), Card.status.in_([CardStatus.new, CardStatus.uncertain]))
+            .limit(1)
+        )
+        if not has_any_cards:
+            return DrawResponse(
+                session_id=session_id,
+                card=None,
+                round_complete=False,
+                message="卡池没有卡片，请先导入教材。",
+            )
+        if not has_drawable_cards:
+            return DrawResponse(
+                session_id=session_id,
+                card=None,
+                round_complete=False,
+                message="当前没有可抽取的卡片。",
+            )
         return DrawResponse(
             session_id=session_id,
             card=None,

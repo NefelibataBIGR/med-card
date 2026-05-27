@@ -114,6 +114,52 @@ def test_delete_card_excludes_it_from_draws() -> None:
     assert second_draw.json()["card"]["id"] != first_card_id
 
 
+def test_draw_with_empty_pool_returns_empty_pool_message() -> None:
+    db = build_session()
+    client = build_client(db)
+
+    response = client.get("/api/cards/draw")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["card"] is None
+    assert payload["round_complete"] is False
+    assert payload["message"] == "卡池没有卡片，请先导入教材。"
+
+
+def test_draw_with_only_non_drawable_cards_returns_specific_message() -> None:
+    db = build_session()
+    textbook = Textbook(
+        filename="sample.pdf",
+        stored_path="sample.pdf",
+        status=TextbookStatus.completed,
+        card_count=1,
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+    db.add(
+        Card(
+            textbook_id=textbook.id,
+            concept_name="Stable concept",
+            summary="This card exists but is not drawable in the review queue.",
+            chapter="General",
+            source_excerpt="Already reviewed.",
+            status=CardStatus.familiar,
+        )
+    )
+    db.commit()
+
+    client = build_client(db)
+    response = client.get("/api/cards/draw")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["card"] is None
+    assert payload["round_complete"] is False
+    assert payload["message"] == "当前没有可抽取的卡片。"
+
+
 def test_import_endpoint_validates_missing_configuration(monkeypatch) -> None:
     monkeypatch.setenv("MED_CARD_LLM_PROVIDER", "deepseek")
     monkeypatch.setenv("MED_CARD_LLM_API_KEY", "")

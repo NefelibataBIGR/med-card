@@ -57,7 +57,6 @@ export function App() {
   const [historyCursor, setHistoryCursor] = useState<number | null>(null)
   const [sessionId, setSessionId] = useState('')
   const [drawMessage, setDrawMessage] = useState('点击“抽取下一张”，开始本轮复习。')
-  const [roundComplete, setRoundComplete] = useState(false)
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
@@ -210,7 +209,6 @@ export function App() {
       const result = await drawCard(sessionId || undefined)
       setSessionId(result.session_id)
       setHistoryCursor(null)
-      setRoundComplete(result.round_complete)
       setDrawMessage(result.message)
       if (result.card) {
         upsertDrawHistory(result.card)
@@ -233,7 +231,6 @@ export function App() {
       await resetSession(sessionId)
       setDrawHistory([])
       setHistoryCursor(null)
-      setRoundComplete(false)
       setDrawMessage('本轮已重置，可以重新抽卡。')
     } catch (err) {
       setError((err as Error).message)
@@ -538,7 +535,7 @@ export function App() {
                 </article>
               ) : (
                 <div className="emptyState">
-                  <p>{roundComplete ? '本轮已完成，可重置后重新开始。' : '当前还没有抽出的卡片。'}</p>
+                  <p>{drawMessage}</p>
                 </div>
               )}
             </section>
