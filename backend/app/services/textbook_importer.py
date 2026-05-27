@@ -305,6 +305,8 @@ class TextbookImporter:
     ) -> tuple[int, int]:
         imported = 0
         skipped = 0
+        if not raw_cards:
+            return 0, 1
         local_seen: dict[str, list[str]] = {}
         existing_by_chapter: dict[str, list[str]] = {}
         for raw_card in raw_cards:

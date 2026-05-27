@@ -190,6 +190,47 @@ def test_process_textbook_skips_heading_like_chunks(monkeypatch) -> None:
     assert refreshed_textbook.skipped_cards == 1
 
 
+def test_process_textbook_counts_empty_llm_result_as_skipped(monkeypatch) -> None:
+    db = build_session()
+    importer = TextbookImporter(db)
+
+    textbook = Textbook(
+        filename="empty-result.pdf",
+        stored_path="empty-result.pdf",
+        status=TextbookStatus.pending,
+        summary="queued",
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    monkeypatch.setattr(
+        importer.text_extractor,
+        "extract_chunks",
+        lambda _path: [ParagraphChunk(index=1, page_number=23, section_path="Chapter 1 Overview", text="正文段落")],
+    )
+
+    async def fake_extract_cards(_chunk: ParagraphChunk) -> list[dict[str, str]]:
+        return []
+
+    monkeypatch.setattr(importer.llm, "extract_cards", fake_extract_cards)
+
+    import anyio
+
+    result = anyio.run(importer.process_textbook, textbook.id)
+
+    cards = list(db.scalars(select(Card)).all())
+    refreshed_textbook = db.get(Textbook, textbook.id)
+
+    assert cards == []
+    assert result.imported_cards == 0
+    assert result.skipped_cards == 1
+    assert refreshed_textbook is not None
+    assert refreshed_textbook.status == TextbookStatus.completed
+    assert refreshed_textbook.card_count == 0
+    assert refreshed_textbook.skipped_cards == 1
+
+
 def test_retry_failure_resolves_queue_and_updates_textbook(monkeypatch) -> None:
     db = build_session()
     importer = TextbookImporter(db)
