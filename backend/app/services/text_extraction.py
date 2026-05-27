@@ -47,6 +47,11 @@ class TextLayerChunkExtractor:
         re.compile(r"^\s*[（(]?[一二三四五六七八九十0-9]+[)）]\s*.+$"),
         re.compile(r"^\s*[0-9]+\.[0-9.]*\s+.+$"),
     )
+    _toc_title_patterns = (
+        re.compile(r"^\s*目\s*录\s*$"),
+        re.compile(r"^\s*contents\s*$", re.IGNORECASE),
+        re.compile(r"^\s*table\s+of\s+contents\s*$", re.IGNORECASE),
+    )
     _standalone_page_pattern = re.compile(r"^\d{1,4}$")
 
     def __init__(self) -> None:
@@ -59,12 +64,18 @@ class TextLayerChunkExtractor:
         current_path: list[str] = []
         started_content = False
         chunk_index = 1
+        page_batches: list[tuple[list[str], int | None, list[str]]] = []
 
         for page in reader.pages:
             raw_text = page.extract_text() or ""
             lines = self._normalize_lines(raw_text)
-            printed_page_number = self._detect_printed_page_number(lines)
-            paragraphs = self._extract_paragraphs(lines)
+            page_batches.append((lines, self._detect_printed_page_number(lines), self._extract_paragraphs(lines)))
+
+        start_page_index = self._content_start_page_index([lines for lines, _, _ in page_batches])
+
+        for lines, printed_page_number, paragraphs in page_batches[start_page_index:]:
+            if not lines:
+                continue
 
             for paragraph_index, paragraph in enumerate(paragraphs):
                 if not paragraph:
@@ -175,6 +186,56 @@ class TextLayerChunkExtractor:
         if any(pattern.match(stripped) for pattern in self._section_patterns):
             return 2
         return None
+
+    def _content_start_page_index(self, pages: list[list[str]]) -> int:
+        toc_page_index: int | None = None
+        for index, lines in enumerate(pages):
+            if self._is_table_of_contents_page(lines):
+                toc_page_index = index
+                break
+
+        if toc_page_index is None:
+            return 0
+
+        for index in range(toc_page_index + 1, len(pages)):
+            if not self._is_table_of_contents_page(pages[index]):
+                return index
+        return len(pages)
+
+    def _is_table_of_contents_page(self, lines: list[str]) -> bool:
+        if not lines:
+            return False
+
+        has_toc_title = any(
+            pattern.fullmatch(line.strip())
+            for pattern in self._toc_title_patterns
+            for line in lines[: min(len(lines), 8)]
+        )
+        toc_entry_count = sum(1 for line in lines if self._looks_like_toc_entry(line))
+
+        if has_toc_title:
+            return True
+        return toc_entry_count >= 3
+
+    def _looks_like_toc_entry(self, text: str) -> bool:
+        stripped = text.strip()
+        if len(stripped) < 6 or len(stripped) > 100:
+            return False
+        if self._standalone_page_pattern.fullmatch(stripped):
+            return False
+        if re.search(r"(?:\.{2,}|…{2,})\s*\d{1,4}$", stripped):
+            return True
+        if not re.search(r"\d{1,4}$", stripped):
+            return False
+        if any(mark in stripped for mark in ("。", "；", "！", "？", "!", "?")):
+            return False
+
+        title = re.sub(r"\d{1,4}$", "", stripped).strip(" .·…-")
+        if not title:
+            return False
+        if self._heading_level(title):
+            return True
+        return bool(re.match(r"^(chapter|section|part|appendix)\b", title, re.IGNORECASE))
 
     def _next_content_paragraph(self, paragraphs: list[str], start_index: int) -> str | None:
         for paragraph in paragraphs[start_index:]:

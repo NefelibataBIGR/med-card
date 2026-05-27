@@ -108,3 +108,36 @@ def test_text_extractor_skips_standalone_subsection_titles(monkeypatch) -> None:
     assert chunks[0].page_number == 21
     assert chunks[0].section_path == "Chapter 1 Overview / Adrenocortical hormone effects"
     assert chunks[0].text == "Adrenocortical hormones regulate metabolism and immune responses in multiple tissues."
+
+
+def test_text_extractor_skips_pages_before_table_of_contents(monkeypatch) -> None:
+    extractor = TextLayerChunkExtractor()
+
+    class FakePage:
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        def extract_text(self) -> str:
+            return self._text
+
+    class FakeReader:
+        def __init__(self, _path: str) -> None:
+            self.pages = [
+                FakePage("Preface\nThis preface page should not be parsed into chunks.\n"),
+                FakePage(
+                    "Contents\n"
+                    "Chapter 1 Overview ........ 1\n"
+                    "Chapter 2 Respiration ........ 23\n"
+                    "Chapter 3 Circulation ........ 45\n"
+                ),
+                FakePage("1\nChapter 1 Overview\nThis is the first body paragraph after the table of contents.\n"),
+            ]
+
+    monkeypatch.setattr("app.services.text_extraction.PdfReader", FakeReader)
+
+    chunks = extractor.extract_chunks(Path("fake.pdf"))
+
+    assert len(chunks) == 1
+    assert chunks[0].page_number == 1
+    assert chunks[0].section_path == "Chapter 1 Overview"
+    assert chunks[0].text == "This is the first body paragraph after the table of contents."
