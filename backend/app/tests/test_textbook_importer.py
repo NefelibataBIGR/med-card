@@ -135,6 +135,61 @@ def test_process_textbook_skips_highly_similar_concepts(monkeypatch) -> None:
     assert cards[0].page_number == 21
 
 
+def test_process_textbook_skips_heading_like_chunks(monkeypatch) -> None:
+    db = build_session()
+    importer = TextbookImporter(db)
+
+    textbook = Textbook(
+        filename="heading-only.pdf",
+        stored_path="heading-only.pdf",
+        status=TextbookStatus.pending,
+        summary="queued",
+    )
+    db.add(textbook)
+    db.commit()
+    db.refresh(textbook)
+
+    monkeypatch.setattr(
+        importer.text_extractor,
+        "extract_chunks",
+        lambda _path: [
+            ParagraphChunk(
+                index=1,
+                page_number=22,
+                section_path="Chapter 1 Overview",
+                text="Physiologic effects of adrenocortical hormones",
+            )
+        ],
+    )
+
+    async def fake_extract_cards(_chunk: ParagraphChunk) -> list[dict[str, str]]:
+        return [
+            {
+                "concept_name": "Physiologic effects of adrenocortical hormones",
+                "summary": "Physiologic effects of adrenocortical hormones",
+                "chapter": "Chapter 1 Overview",
+                "source_excerpt": "Physiologic effects of adrenocortical hormones",
+            }
+        ]
+
+    monkeypatch.setattr(importer.llm, "extract_cards", fake_extract_cards)
+
+    import anyio
+
+    result = anyio.run(importer.process_textbook, textbook.id)
+
+    cards = list(db.scalars(select(Card)).all())
+    refreshed_textbook = db.get(Textbook, textbook.id)
+
+    assert cards == []
+    assert result.imported_cards == 0
+    assert result.skipped_cards == 1
+    assert refreshed_textbook is not None
+    assert refreshed_textbook.status == TextbookStatus.completed
+    assert refreshed_textbook.card_count == 0
+    assert refreshed_textbook.skipped_cards == 1
+
+
 def test_retry_failure_resolves_queue_and_updates_textbook(monkeypatch) -> None:
     db = build_session()
     importer = TextbookImporter(db)

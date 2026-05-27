@@ -66,13 +66,17 @@ class TextLayerChunkExtractor:
             printed_page_number = self._detect_printed_page_number(lines)
             paragraphs = self._extract_paragraphs(lines)
 
-            for paragraph in paragraphs:
+            for paragraph_index, paragraph in enumerate(paragraphs):
                 if not paragraph:
                     continue
                 if self._is_noise_paragraph(paragraph) and not started_content:
                     continue
 
                 heading_level = self._heading_level(paragraph)
+                if heading_level is None:
+                    next_paragraph = self._next_content_paragraph(paragraphs, paragraph_index + 1)
+                    if self._is_standalone_heading_paragraph(paragraph, next_paragraph):
+                        heading_level = 3
                 if heading_level:
                     started_content = True
                     current_path = self._update_section_path(current_path, heading_level, paragraph)
@@ -121,6 +125,11 @@ class TextLayerChunkExtractor:
                 paragraphs.append(line)
                 continue
 
+            if current and len(current) == 1 and self._is_standalone_heading_paragraph(current[0], line):
+                paragraphs.append(self._merge_paragraph_lines(current))
+                current = [line]
+                continue
+
             if current and self._starts_new_paragraph(line, current):
                 paragraphs.append(self._merge_paragraph_lines(current))
                 current = [line]
@@ -166,6 +175,55 @@ class TextLayerChunkExtractor:
         if any(pattern.match(stripped) for pattern in self._section_patterns):
             return 2
         return None
+
+    def _next_content_paragraph(self, paragraphs: list[str], start_index: int) -> str | None:
+        for paragraph in paragraphs[start_index:]:
+            if paragraph.strip():
+                return paragraph
+        return None
+
+    def _is_standalone_heading_paragraph(self, text: str, next_paragraph: str | None) -> bool:
+        stripped = text.strip()
+        if len(stripped) < 8 or len(stripped) > 40:
+            return False
+        if next_paragraph is None or len(next_paragraph.strip()) < 16:
+            return False
+        if any(mark in stripped for mark in ("。", "；", "！", "？", ".", ";", "!", "?")):
+            return False
+        if stripped.endswith(("：", ":")):
+            return False
+        if self._contains_sentence_marker(stripped):
+            return False
+        if not re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9()（）·、/\-\s]+", stripped):
+            return False
+        return len(stripped) <= 24 or len(stripped) <= max(18, len(next_paragraph.strip()) // 2)
+
+    def _contains_sentence_marker(self, text: str) -> bool:
+        lowered = text.casefold()
+        sentence_markers = (
+            "是",
+            "为",
+            "有",
+            "可",
+            "会",
+            "将",
+            "包括",
+            "位于",
+            "表现为",
+            "称为",
+            "分为",
+            "属于",
+            "出现",
+            "形成",
+            "产生",
+            "引起",
+            "进入",
+            "refers to",
+            "defined as",
+            "contains",
+            "includes",
+        )
+        return any(marker in lowered for marker in sentence_markers)
 
     def _detect_printed_page_number(self, lines: list[str]) -> int | None:
         if not lines:

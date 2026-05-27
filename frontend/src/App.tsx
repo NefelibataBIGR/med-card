@@ -341,7 +341,6 @@ export function App() {
   function renderCardMeta(card: Card) {
     return (
       <>
-        <p className="chapter">{card.chapter}</p>
         <p className="hint">{card.page_number ? `教材第 ${card.page_number} 页` : '页码未知'}</p>
       </>
     )
@@ -353,7 +352,7 @@ export function App() {
         <div>
           <p className="eyebrow">MED CARD</p>
           <h1>医学教材概念卡片复习</h1>
-          <p className="lede">按段落抽取主概念，一段一张卡，保留英文名、教材页码和章节路径，便于回看原文。</p>
+          <p className="lede">按段落抽取主概念，一段一张卡，保留英文名和教材页码，便于回看原文。</p>
         </div>
         <div className="heroPanel">
           <span>当前轮次</span>

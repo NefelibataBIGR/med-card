@@ -380,6 +380,8 @@ class TextbookImporter:
         source_excerpt: str,
         chunk: ParagraphChunk,
     ) -> bool:
+        if self._looks_like_standalone_heading_text(chunk.text):
+            return True
         normalized_excerpt = self._normalize_heading_text(source_excerpt or chunk.text)
         normalized_title = self._normalize_heading_text(concept_name)
         normalized_summary = self._normalize_heading_text(summary)
@@ -391,6 +393,43 @@ class TextbookImporter:
 
     def _normalize_heading_text(self, value: str) -> str:
         return re.sub(r"\s+", "", value).casefold()
+
+    def _looks_like_standalone_heading_text(self, value: str) -> bool:
+        stripped = " ".join(value.split())
+        if len(stripped) < 8 or len(stripped) > 40:
+            return False
+        if any(mark in stripped for mark in ("。", "；", "！", "？", ".", ";", "!", "?")):
+            return False
+        if stripped.endswith(("：", ":")):
+            return False
+        if any(
+            marker in stripped.casefold()
+            for marker in (
+                "是",
+                "为",
+                "有",
+                "可",
+                "会",
+                "将",
+                "包括",
+                "位于",
+                "表现为",
+                "称为",
+                "分为",
+                "属于",
+                "出现",
+                "形成",
+                "产生",
+                "引起",
+                "进入",
+                "refers to",
+                "defined as",
+                "contains",
+                "includes",
+            )
+        ):
+            return False
+        return bool(re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9()（）·、/\-\s]+", stripped))
 
     def _load_existing_concepts(self, textbook_id: int, chapter: str) -> list[str]:
         stmt = select(Card.concept_name).where(

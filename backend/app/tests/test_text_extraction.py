@@ -77,3 +77,34 @@ def test_text_extractor_prefers_printed_page_number_from_page_edges(monkeypatch)
     chunks = extractor.extract_chunks(Path("fake.pdf"))
 
     assert [chunk.page_number for chunk in chunks] == [12, 13]
+
+
+def test_text_extractor_skips_standalone_subsection_titles(monkeypatch) -> None:
+    extractor = TextLayerChunkExtractor()
+
+    class FakePage:
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        def extract_text(self) -> str:
+            return self._text
+
+    class FakeReader:
+        def __init__(self, _path: str) -> None:
+            self.pages = [
+                FakePage(
+                    "21\n"
+                    "Chapter 1 Overview\n"
+                    "Adrenocortical hormone effects\n"
+                    "Adrenocortical hormones regulate metabolism and immune responses in multiple tissues.\n"
+                )
+            ]
+
+    monkeypatch.setattr("app.services.text_extraction.PdfReader", FakeReader)
+
+    chunks = extractor.extract_chunks(Path("fake.pdf"))
+
+    assert len(chunks) == 1
+    assert chunks[0].page_number == 21
+    assert chunks[0].section_path == "Chapter 1 Overview / Adrenocortical hormone effects"
+    assert chunks[0].text == "Adrenocortical hormones regulate metabolism and immune responses in multiple tissues."
