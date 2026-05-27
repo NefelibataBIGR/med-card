@@ -338,6 +338,44 @@ export function App() {
     setHistoryCursor(null)
   }
 
+  function getImportProgress(textbook: Textbook) {
+    if (textbook.total_chunks <= 0) {
+      const indeterminate = textbook.status === 'pending' || textbook.status === 'processing'
+      return {
+        indeterminate,
+        label: indeterminate ? '准备中' : '0%',
+        percent: textbook.status === 'completed' ? 100 : 0,
+      }
+    }
+
+    const percent = Math.max(0, Math.min(100, Math.round((textbook.processed_chunks / textbook.total_chunks) * 100)))
+    return {
+      indeterminate: false,
+      label: `${percent}%`,
+      percent,
+    }
+  }
+
+  function renderImportProgress(textbook: Textbook) {
+    const progress = getImportProgress(textbook)
+
+    return (
+      <div className="importProgress">
+        <div
+          aria-label={`导入进度 ${progress.label}`}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={progress.indeterminate ? undefined : progress.percent}
+          className={`importProgressBar${progress.indeterminate ? ' indeterminate' : ''}`}
+          role="progressbar"
+        >
+          <span style={progress.indeterminate ? undefined : { width: `${progress.percent}%` }} />
+        </div>
+        <span className="importProgressValue">{progress.label}</span>
+      </div>
+    )
+  }
+
   function renderCardMeta(card: Card) {
     return (
       <>
@@ -395,9 +433,10 @@ export function App() {
                 {textbooks.length === 0 ? <p className="hint">暂时还没有导入记录。</p> : null}
                 {textbooks.map((item) => (
                   <article className="listItem" key={item.id}>
-                    <div>
+                    <div className="listContent">
                       <strong>{item.filename}</strong>
                       <p>{item.summary ?? '正在处理中，暂时还没有摘要。'}</p>
+                      {renderImportProgress(item)}
                       {item.processed_at ? <p className="hint">完成时间：{new Date(item.processed_at).toLocaleString()}</p> : null}
                       <p className="hint">
                         进度 {item.processed_chunks}/{item.total_chunks || 0} 个段落，失败 {item.failed_chunks} 个，跳过 {item.skipped_cards} 条
