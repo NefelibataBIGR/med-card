@@ -62,6 +62,7 @@ export function App() {
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  const [pendingUploadName, setPendingUploadName] = useState('')
   const [editForm, setEditForm] = useState<EditForm>(emptyCardForm)
   const [poolQuery, setPoolQuery] = useState('')
   const [uncertainPoolItems, setUncertainPoolItems] = useState<Card[]>([])
@@ -78,6 +79,8 @@ export function App() {
   const canViewPreviousCard = activeCardIndex > 0
   const canViewNextCard = activeCardIndex >= 0 && activeCardIndex < latestDrawIndex
   const canReturnToLatestCard = historyCursor !== null && activeCardIndex !== latestDrawIndex
+  const activeImport = textbooks.find((item) => item.status === 'pending' || item.status === 'processing') ?? null
+  const importingFilename = activeImport?.filename ?? (uploading ? pendingUploadName : '')
 
   useEffect(() => {
     void refreshTextbooks()
@@ -197,6 +200,7 @@ export function App() {
       const result = await importTextbook(file)
       await refreshTextbooks()
       event.currentTarget.reset()
+      setPendingUploadName('')
       setDrawMessage(result.message)
       setTab('import')
     } catch (err) {
@@ -445,11 +449,22 @@ export function App() {
             <section className="panel">
               <h2>导入教材</h2>
               <form className="uploadForm" onSubmit={handleUpload}>
-                <input accept="application/pdf" name="pdf" type="file" />
+                <input
+                  accept="application/pdf"
+                  name="pdf"
+                  type="file"
+                  onChange={(event) => setPendingUploadName(event.target.files?.[0]?.name ?? '')}
+                />
                 <button disabled={uploading} type="submit">
                   {uploading ? '导入中…' : '上传并抽卡'}
                 </button>
               </form>
+              {importingFilename ? (
+                <div className="importNotice">
+                  <span className="importNoticeLabel">当前导入文件</span>
+                  <strong title={importingFilename}>{importingFilename}</strong>
+                </div>
+              ) : null}
               <p className="hint">在 `.env` 中配置 `MED_CARD_LLM_API_KEY`。重新导入会覆盖旧教材、旧卡片和旧失败记录。</p>
             </section>
 

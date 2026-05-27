@@ -199,6 +199,31 @@ textarea {
   flex: 1;
 }
 
+.importNotice {
+  margin-top: 0.9rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1.2rem;
+  border: 1px solid rgba(47, 143, 128, 0.18);
+  background:
+    linear-gradient(135deg, rgba(33, 120, 109, 0.08), rgba(191, 74, 39, 0.08)),
+    rgba(255, 255, 255, 0.92);
+}
+
+.importNoticeLabel {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.importNotice strong {
+  display: block;
+  color: var(--ink-soft);
+  word-break: break-all;
+}
+
 .hint {
   color: var(--muted);
 }
