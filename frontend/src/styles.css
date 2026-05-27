@@ -270,6 +270,10 @@ textarea {
   animation: lift 280ms ease;
 }
 
+.historyHint {
+  margin: 0.9rem 0 0;
+}
+
 .cardView h2 {
   margin-bottom: 0.4rem;
 }

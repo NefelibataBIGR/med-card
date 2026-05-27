@@ -53,7 +53,8 @@ const cardStatusLabels: Record<Card['status'], string> = {
 export function App() {
   const [tab, setTab] = useState<TabKey>('import')
   const [textbooks, setTextbooks] = useState<Textbook[]>([])
-  const [currentCard, setCurrentCard] = useState<Card | null>(null)
+  const [drawHistory, setDrawHistory] = useState<Card[]>([])
+  const [historyCursor, setHistoryCursor] = useState<number | null>(null)
   const [sessionId, setSessionId] = useState('')
   const [drawMessage, setDrawMessage] = useState('点击“抽取下一张”，开始本轮复习。')
   const [roundComplete, setRoundComplete] = useState(false)
@@ -69,6 +70,11 @@ export function App() {
   const [importFailures, setImportFailures] = useState<ImportChunkFailure[]>([])
   const [retryingFailureId, setRetryingFailureId] = useState<number | null>(null)
   const [retryingAllFailures, setRetryingAllFailures] = useState(false)
+  const latestDrawIndex = drawHistory.length - 1
+  const activeCardIndex = historyCursor ?? latestDrawIndex
+  const currentCard = activeCardIndex >= 0 ? drawHistory[activeCardIndex] ?? null : null
+  const canViewPreviousCard = activeCardIndex > 0
+  const canReturnToLatestCard = historyCursor !== null && activeCardIndex !== latestDrawIndex
 
   useEffect(() => {
     void refreshTextbooks()
@@ -107,6 +113,19 @@ export function App() {
       void refreshPools(poolQuery)
     }
   }, [tab, poolQuery])
+
+  useEffect(() => {
+    if (historyCursor === null) {
+      return
+    }
+    if (drawHistory.length === 0) {
+      setHistoryCursor(null)
+      return
+    }
+    if (historyCursor > drawHistory.length - 1) {
+      setHistoryCursor(drawHistory.length - 1)
+    }
+  }, [drawHistory, historyCursor])
 
   useEffect(() => {
     if (selectedTextbookId === null) {
@@ -149,6 +168,18 @@ export function App() {
     }
   }
 
+  function upsertDrawHistory(card: Card) {
+    setDrawHistory((history) => {
+      const index = history.findIndex((item) => item.id === card.id)
+      if (index === -1) {
+        return [...history, card]
+      }
+      const nextHistory = [...history]
+      nextHistory[index] = card
+      return nextHistory
+    })
+  }
+
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const input = event.currentTarget.elements.namedItem('pdf') as HTMLInputElement | null
@@ -178,10 +209,11 @@ export function App() {
     try {
       const result = await drawCard(sessionId || undefined)
       setSessionId(result.session_id)
-      setCurrentCard(result.card)
+      setHistoryCursor(null)
       setRoundComplete(result.round_complete)
       setDrawMessage(result.message)
       if (result.card) {
+        upsertDrawHistory(result.card)
         setTab('draw')
       }
     } catch (err) {
@@ -199,7 +231,8 @@ export function App() {
     setError('')
     try {
       await resetSession(sessionId)
-      setCurrentCard(null)
+      setDrawHistory([])
+      setHistoryCursor(null)
       setRoundComplete(false)
       setDrawMessage('本轮已重置，可以重新抽卡。')
     } catch (err) {
@@ -218,11 +251,11 @@ export function App() {
     try {
       if (action === 'delete') {
         await deleteCard(sessionId || undefined, currentCard.id)
-        setCurrentCard(null)
+        setDrawHistory((history) => history.filter((item) => item.id !== currentCard.id))
         setDrawMessage('卡片已删除。')
       } else {
         const updated = await markCard(sessionId || undefined, currentCard.id, action)
-        setCurrentCard(updated)
+        upsertDrawHistory(updated)
         setDrawMessage('卡片状态已更新。')
       }
       await refreshPools(poolQuery)
@@ -250,7 +283,7 @@ export function App() {
         source_excerpt: editForm.source_excerpt,
       }
       const updated = await updateCard(sessionId || undefined, currentCard.id, payload)
-      setCurrentCard(updated)
+      upsertDrawHistory(updated)
       setDrawMessage('卡片内容已保存。')
       setIsEditorOpen(false)
       await refreshPools(poolQuery)
@@ -289,6 +322,20 @@ export function App() {
     } finally {
       setRetryingAllFailures(false)
     }
+  }
+
+  function handleShowPreviousCard() {
+    if (!canViewPreviousCard) {
+      return
+    }
+    setHistoryCursor(activeCardIndex - 1)
+  }
+
+  function handleReturnToLatestCard() {
+    if (latestDrawIndex < 0) {
+      return
+    }
+    setHistoryCursor(null)
   }
 
   function renderCardMeta(card: Card) {
@@ -420,6 +467,12 @@ export function App() {
           <>
             <section className="panel cardPanel">
               <div className="cardToolbar">
+                <button className="ghost" disabled={!canViewPreviousCard || loading} onClick={handleShowPreviousCard} type="button">
+                  上一张
+                </button>
+                <button className="ghost" disabled={!canReturnToLatestCard || loading} onClick={handleReturnToLatestCard} type="button">
+                  返回最新
+                </button>
                 <button disabled={loading} onClick={() => void handleDraw()} type="button">
                   {loading ? '处理中…' : '抽取下一张'}
                 </button>
@@ -427,6 +480,14 @@ export function App() {
                   重置本轮
                 </button>
               </div>
+
+              {drawHistory.length > 0 ? (
+                <p className="hint historyHint">
+                  {historyCursor === null
+                    ? `已抽 ${drawHistory.length} 张，可返回查看上一张。`
+                    : `正在查看第 ${activeCardIndex + 1} / ${drawHistory.length} 张已抽卡片。`}
+                </p>
+              ) : null}
 
               {currentCard ? (
                 <article className="cardView">
