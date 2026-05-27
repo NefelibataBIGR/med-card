@@ -275,22 +275,29 @@ textarea {
 }
 
 .importMeta {
-  display: grid;
-  justify-items: end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 0.85rem;
   flex-shrink: 0;
+  align-self: stretch;
 }
 
 .metaActions {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.65rem;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+  margin-top: auto;
 }
 
 .metaActionButton {
-  min-width: 8.5rem;
-  padding: 0.78rem 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 7.5rem;
+  height: 2.55rem;
+  padding: 0.4rem 0.7rem;
   border-radius: 1.05rem;
   border: 1px solid rgba(191, 74, 39, 0.14);
   background:
@@ -298,6 +305,9 @@ textarea {
   box-shadow: 0 12px 28px rgba(25, 33, 45, 0.08);
   color: var(--ink-soft);
   font-weight: 600;
+  font-size: 0.9rem;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .metaActionButton:hover:not(:disabled) {
@@ -547,10 +557,10 @@ textarea {
   }
 
   .metaActions {
-    justify-content: stretch;
+    align-items: stretch;
   }
 
   .metaActionButton {
-    width: 100%;
+    width: 7.5rem;
   }
 }

@@ -491,13 +491,6 @@ export function App() {
                       </div>
                       <div className="metaActions">
                         <button
-                          className="metaActionButton"
-                          onClick={() => setSelectedTextbookId((current) => (current === item.id ? null : item.id))}
-                          type="button"
-                        >
-                          {selectedTextbookId === item.id ? '收起失败段落' : '查看失败段落'}
-                        </button>
-                        <button
                           className="metaActionButton metaActionButton-danger"
                           disabled={
                             cancellingTextbookId === item.id ||
@@ -514,6 +507,13 @@ export function App() {
                               : cancellingTextbookId === item.id
                                 ? '提交中…'
                                 : '取消导入'}
+                        </button>
+                        <button
+                          className="metaActionButton"
+                          onClick={() => setSelectedTextbookId((current) => (current === item.id ? null : item.id))}
+                          type="button"
+                        >
+                          {selectedTextbookId === item.id ? '收起失败段落' : '查看失败段落'}
                         </button>
                       </div>
                     </div>
